@@ -1,0 +1,30 @@
+# PR labeler rules (consumed by .github/workflows/pr-check.yml -> ci-templates labeler)
+# See https://github.com/actions/labeler (v7 schema)
+
+"github_actions":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - ".gitignore"
+          - ".lefthook.yml"
+          - ".golangci.yml"
+          - ".yamllint"
+          - "Makefile"
+
+"go":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.go"
+          - "go.mod"
+
+"dependencies":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "go.mod"
+          - "go.sum"
+
+"docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**"

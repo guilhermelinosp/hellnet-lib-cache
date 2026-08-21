@@ -1,0 +1,42 @@
+---
+output: false
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.go"
+      run: go fmt ./...
+    vet:
+      glob: "*.go"
+      run: go vet ./...
+    tidy:
+      run: go mod tidy && git diff --exit-code go.mod $([ -f go.sum ] && echo go.sum)
+    lint:
+      run: |
+        if command -v golangci-lint >/dev/null 2>&1; then
+          golangci-lint run
+        else
+          echo "golangci-lint not installed; skipping"
+        fi
+    yamllint:
+      glob: "*.{yaml,yml}"
+      run: yamllint {staged_files}
+    secrets-scan:
+      glob: "*.{yaml,yml,go,json,sh}"
+      run: |
+        if command -v gitleaks >/dev/null 2>&1; then
+          gitleaks detect --source . --no-git -v
+        else
+          echo "gitleaks not installed; skipping"
+        fi
+
+pre-push:
+  commands:
+    test:
+      run: go test -count=1 -race ./...
+
+commit-msg:
+  commands:
+    conventional:
+      run: 'grep -Eq "^(feat|fix|docs|style|refactor|perf|test|ci|chore|revert|ops)(\(.+\))?!?: .+" {1}'

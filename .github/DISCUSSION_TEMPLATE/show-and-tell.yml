@@ -1,0 +1,27 @@
+title: "Show and Tell"
+labels: [show-and-tell]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share what you've built with this project.
+
+  - type: textarea
+    id: work
+    attributes:
+      label: What did you build?
+      description: Describe what you built using this project.
+    validations:
+      required: true
+
+  - type: input
+    id: link
+    attributes:
+      label: Link
+      description: Link to your project (if public).
+
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Feedback
+      description: Any feedback on the project based on your experience?

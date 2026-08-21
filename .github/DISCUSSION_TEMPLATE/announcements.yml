@@ -1,0 +1,15 @@
+title: "Announcement"
+labels: [announcement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for project announcements.
+
+  - type: textarea
+    id: announcement
+    attributes:
+      label: Announcement
+      description: What would you like to announce?
+    validations:
+      required: true
