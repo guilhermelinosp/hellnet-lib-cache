@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/guilhermelinosp/hellnet-lib-environments/environments"
 )
 
 // optsL1Only returns options with only L1 enabled (no external deps).
@@ -203,14 +205,14 @@ func TestOptions_PasswordOptional(t *testing.T) {
 }
 
 func TestOptions_DotNetDuration(t *testing.T) {
-	d, err := parseDotNetDuration("00:05:00")
+	d, err := environments.ParseDuration("00:05:00")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d != 5*time.Minute {
 		t.Fatalf("got %v want 5m", d)
 	}
-	d, err = parseDotNetDuration("24:00:00")
+	d, err = environments.ParseDuration("24:00:00")
 	if err != nil {
 		t.Fatal(err)
 	}
