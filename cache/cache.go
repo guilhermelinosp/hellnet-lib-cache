@@ -13,13 +13,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/joho/godotenv"
+	environments "github.com/guilhermelinosp/hellnet-lib-environments/environments"
 )
 
 // Provider is an individual cache layer (L1 memory, L2 external).
@@ -111,31 +109,31 @@ func DefaultOptions() Options {
 // starting from DefaultOptions as the fallback for any unset value.
 func LoadFromEnv() Options {
 	o := DefaultOptions()
-	o.L1Provider = env("HELLNET_CACHE_L1_PROVIDER", o.L1Provider)
-	o.L1SizeLimitMB = envInt("HELLNET_CACHE_L1_SIZE_LIMIT_MB", o.L1SizeLimitMB)
-	o.L1DefaultTTL = envDur("HELLNET_CACHE_L1_DEFAULT_TTL", o.L1DefaultTTL)
-	o.L1ExpirationScanFrequency = envDur("HELLNET_CACHE_L1_EXPIRATION_SCAN_FREQUENCY", o.L1ExpirationScanFrequency)
-	o.L1SlidingExpiration = envBool("HELLNET_CACHE_L1_SLIDING_EXPIRATION", o.L1SlidingExpiration)
+	o.L1Provider = environments.GetString("HELLNET_CACHE_", "", "L1_PROVIDER", o.L1Provider)
+	o.L1SizeLimitMB = environments.GetInt("HELLNET_CACHE_", "", "L1_SIZE_LIMIT_MB", o.L1SizeLimitMB)
+	o.L1DefaultTTL = environments.GetDuration("HELLNET_CACHE_", "", "L1_DEFAULT_TTL", o.L1DefaultTTL)
+	o.L1ExpirationScanFrequency = environments.GetDuration("HELLNET_CACHE_", "", "L1_EXPIRATION_SCAN_FREQUENCY", o.L1ExpirationScanFrequency)
+	o.L1SlidingExpiration = environments.GetBool("HELLNET_CACHE_", "", "L1_SLIDING_EXPIRATION", o.L1SlidingExpiration)
 
-	o.Connection = env("HELLNET_CACHE_CONNECTION", o.Connection)
-	o.Password = env("HELLNET_CACHE_PASSWORD", o.Password)
-	o.Database = envInt("HELLNET_CACHE_DATABASE", o.Database)
-	o.KeyPrefix = env("HELLNET_CACHE_KEY_PREFIX", o.KeyPrefix)
-	o.ConnectTimeout = envDur("HELLNET_CACHE_CONNECT_TIMEOUT", o.ConnectTimeout)
-	o.ReadTimeout = envDur("HELLNET_CACHE_SYNC_TIMEOUT", o.ReadTimeout)
-	o.RetryCount = envInt("HELLNET_CACHE_RETRY_COUNT", o.RetryCount)
-	o.RetryBaseDelay = envDur("HELLNET_CACHE_RETRY_BASE_DELAY_MS", o.RetryBaseDelay)
-	o.CircuitBreakerFailures = envInt("HELLNET_CACHE_CB_FAILURES", o.CircuitBreakerFailures)
-	o.CircuitBreakerDuration = envDur("HELLNET_CACHE_CB_DURATION_SEC", o.CircuitBreakerDuration)
+	o.Connection = environments.GetString("HELLNET_CACHE_", "", "CONNECTION", o.Connection)
+	o.Password = environments.GetString("HELLNET_CACHE_", "", "PASSWORD", o.Password)
+	o.Database = environments.GetInt("HELLNET_CACHE_", "", "DATABASE", o.Database)
+	o.KeyPrefix = environments.GetString("HELLNET_CACHE_", "", "KEY_PREFIX", o.KeyPrefix)
+	o.ConnectTimeout = environments.GetDuration("HELLNET_CACHE_", "", "CONNECT_TIMEOUT", o.ConnectTimeout)
+	o.ReadTimeout = environments.GetDuration("HELLNET_CACHE_", "", "SYNC_TIMEOUT", o.ReadTimeout)
+	o.RetryCount = environments.GetInt("HELLNET_CACHE_", "", "RETRY_COUNT", o.RetryCount)
+	o.RetryBaseDelay = environments.GetDuration("HELLNET_CACHE_", "", "RETRY_BASE_DELAY_MS", o.RetryBaseDelay)
+	o.CircuitBreakerFailures = environments.GetInt("HELLNET_CACHE_", "", "CB_FAILURES", o.CircuitBreakerFailures)
+	o.CircuitBreakerDuration = environments.GetDuration("HELLNET_CACHE_", "", "CB_DURATION_SEC", o.CircuitBreakerDuration)
 
-	o.DefaultSerializer = env("HELLNET_CACHE_DEFAULT_SERIALIZER", o.DefaultSerializer)
+	o.DefaultSerializer = environments.GetString("HELLNET_CACHE_", "", "DEFAULT_SERIALIZER", o.DefaultSerializer)
 
-	o.EnableL1 = envBool("HELLNET_CACHE_ENABLE_L1", o.EnableL1)
-	o.EnableL2 = envBool("HELLNET_CACHE_ENABLE_L2", o.EnableL2)
-	o.DefaultTTL = envDur("HELLNET_CACHE_DEFAULT_TTL", o.DefaultTTL)
-	o.MaxTTL = envDur("HELLNET_CACHE_MAX_TTL", o.MaxTTL)
-	o.TouchOnRead = envBool("HELLNET_CACHE_TOUCH_ON_READ", o.TouchOnRead)
-	o.TouchTTL = envDur("HELLNET_CACHE_TOUCH_TTL", o.TouchTTL)
+	o.EnableL1 = environments.GetBool("HELLNET_CACHE_", "", "ENABLE_L1", o.EnableL1)
+	o.EnableL2 = environments.GetBool("HELLNET_CACHE_", "", "ENABLE_L2", o.EnableL2)
+	o.DefaultTTL = environments.GetDuration("HELLNET_CACHE_", "", "DEFAULT_TTL", o.DefaultTTL)
+	o.MaxTTL = environments.GetDuration("HELLNET_CACHE_", "", "MAX_TTL", o.MaxTTL)
+	o.TouchOnRead = environments.GetBool("HELLNET_CACHE_", "", "TOUCH_ON_READ", o.TouchOnRead)
+	o.TouchTTL = environments.GetDuration("HELLNET_CACHE_", "", "TOUCH_TTL", o.TouchTTL)
 
 	return o
 }
@@ -173,50 +171,22 @@ func Loading() {
 // loadEnvFiles loads the .env file from disk (HELLNET_CACHE_ENV_FILE, then
 // ./.env in the working directory, then ./.env alongside the executable). Used
 // by Loading() (with validation) and New() (without fail-fast, so it can degrade
-// to memory-only). No-op outside Development/Staging/Production default.
+// to memory-only). Delegates to hellnet-lib-environments, which is a no-op
+// outside Development/Staging/Production default.
 func loadEnvFiles() {
-	if !isDev() {
-		return
-	}
-
-	if custom := os.Getenv("HELLNET_CACHE_ENV_FILE"); custom != "" {
-		_ = godotenv.Load(custom)
-		return
-	}
-
-	// Prefer the .env alongside the executable, then the working directory and
-	// its parents (so a repo-root .env is found even when running from a
-	// subpackage).
-	candidates := []string{".env"}
-	if exe, err := os.Executable(); err == nil {
-		candidates = append([]string{filepath.Join(filepath.Dir(exe), ".env")}, candidates...)
-	}
-	if wd, err := os.Getwd(); err == nil {
-		for dir := wd; ; {
-			candidates = append(candidates, filepath.Join(dir, ".env"))
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
-			_ = godotenv.Load(c)
-			return
-		}
-	}
+	_ = environments.LoadDotEnv("HELLNET_CACHE_ENV_FILE", "HELLNET_ENV_FILE")
 }
 
 // isDev reports whether HELLNET_ENVIRONMENT is Development or unset.
 func isDev() bool {
 	env := deploymentEnv()
-	return env != "Production" && env != "Staging"
+	return env == "" || (env != "Production" && env != "Staging")
 }
 
+// deploymentEnv returns HELLNET_ENVIRONMENT, defaulting to "Development"
+// when unset (retained for test compatibility and fail-fast messaging).
 func deploymentEnv() string {
-	if v := os.Getenv("HELLNET_ENVIRONMENT"); v != "" {
+	if v := environments.DeploymentEnv(); v != "" {
 		return v
 	}
 	return "Development"
@@ -232,70 +202,6 @@ func (o Options) capTTL(ttl time.Duration) time.Duration {
 		return o.MaxTTL
 	}
 	return ttl
-}
-
-func env(key, fallback string) string {
-	if v, ok := os.LookupEnv(key); ok && v != "" {
-		return v
-	}
-	return fallback
-}
-
-func envBool(key string, fallback bool) bool {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return fallback
-	}
-	if v == "true" || v == "1" || v == "yes" || v == "on" {
-		return true
-	}
-	if v == "false" || v == "0" || v == "no" || v == "off" {
-		return false
-	}
-	return fallback
-}
-
-func envInt(key string, fallback int) int {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return fallback
-	}
-	var n int
-	if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
-		return n
-	}
-	return fallback
-}
-
-func envDur(key string, fallback time.Duration) time.Duration {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return fallback
-	}
-	if d, err := time.ParseDuration(v); err == nil {
-		return d
-	}
-	if d, err := parseDotNetDuration(v); err == nil {
-		return d
-	}
-	return fallback
-}
-
-// parseDotNetDuration parses "HH:MM:SS" or "HH:MM:SS.FFF" into a Duration.
-func parseDotNetDuration(v string) (time.Duration, error) {
-	var h, m, s int
-	var frac float64
-	n, err := fmt.Sscanf(v, "%d:%d:%d.%f", &h, &m, &s, &frac)
-	if err != nil || n < 3 {
-		n, err = fmt.Sscanf(v, "%d:%d:%d", &h, &m, &s)
-		if err != nil || n < 3 {
-			return 0, fmt.Errorf("invalid .NET duration: %q", v)
-		}
-	}
-	return time.Duration(h)*time.Hour +
-		time.Duration(m)*time.Minute +
-		time.Duration(s)*time.Second +
-		time.Duration(frac*float64(time.Second)), nil
 }
 
 // Metrics tracks hits, misses, sets and removes per layer. Safe for concurrent use.
