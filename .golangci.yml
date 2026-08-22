@@ -34,12 +34,11 @@ linters:
       rules:
         - name: exported
           severity: warning
+  exclusions:
+    rules:
+      - path: "_test\\.go$"
+        linters:
+          - errcheck
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclusions:
-    rules:
-      # Test files: unchecked errors in defer/setup are acceptable noise.
-      - path: _test\.go
-        linters:
-          - errcheck
