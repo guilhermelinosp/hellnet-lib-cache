@@ -10,7 +10,8 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: github.com/guilhermelinosp/hellnet-lib-cache
+      local-prefixes:
+        - github.com/guilhermelinosp/hellnet-lib-cache
 
 linters:
   enable:
