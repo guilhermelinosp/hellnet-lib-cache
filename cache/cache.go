@@ -4,8 +4,6 @@
 // It features write-through, read-through, stampede protection, env-first
 // configuration and graceful degradation on backend failures. The distributed
 // backend is backend-agnostic in the public API.
-//
-// This is a faithful port of the .NET Hellnet.Cache library.
 package cache
 
 import (
@@ -17,14 +15,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	environments "github.com/guilhermelinosp/hellnet-lib-environments/environments"
+	"github.com/guilhermelinosp/hellnet-lib-environments/environments"
 )
 
 // Provider is an individual cache layer (L1 memory, L2 external).
 type Provider interface {
 	Name() string
 	Get(ctx context.Context, key string) ([]byte, error)
-	Set(ctx context.Context, key string, value []byte, ttl *time.Duration) error
+	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
 	Remove(ctx context.Context, key string) error
 	Exists(ctx context.Context, key string) (bool, error)
 	HealthCheck(ctx context.Context) bool
@@ -39,13 +37,14 @@ type Serializer interface {
 
 // Cache is the multi-layer cache abstraction. Write-through, read-through.
 // The methods use a default (background) context; the *Context variants accept
-// a caller-supplied context for cancellation/deadline control.
+// a caller-supplied context for cancellation/deadline control. A ttl of 0 uses
+// the layer's default TTL.
 type Cache interface {
 	Get(key string, out any) error
-	Set(key string, value any, ttl *time.Duration) error
+	Set(key string, value any, ttl time.Duration) error
 	Remove(key string) error
 	Exists(key string) (bool, error)
-	GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl *time.Duration) error
+	GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl time.Duration) error
 	Close() error
 }
 
@@ -399,13 +398,14 @@ func (c *HybridCache) getRaw(ctx context.Context, key string) (data []byte, foun
 }
 
 // Set stores a value with optional TTL, written to all enabled layers, using a
-// default (background) context.
-func (c *HybridCache) Set(key string, value any, ttl *time.Duration) error {
+// default (background) context. A ttl of 0 uses the layer's default.
+func (c *HybridCache) Set(key string, value any, ttl time.Duration) error {
 	return c.SetContext(context.Background(), key, value, ttl)
 }
 
 // SetContext stores a value with optional TTL, written to all enabled layers.
-func (c *HybridCache) SetContext(ctx context.Context, key string, value any, ttl *time.Duration) error {
+// A ttl of 0 uses the layer's default.
+func (c *HybridCache) SetContext(ctx context.Context, key string, value any, ttl time.Duration) error {
 	data, err := c.serializer.Serialize(value)
 	if err != nil {
 		return err
@@ -413,16 +413,18 @@ func (c *HybridCache) SetContext(ctx context.Context, key string, value any, ttl
 	return c.SetBytes(ctx, key, data, ttl)
 }
 
-// SetBytes writes pre-serialized bytes to all enabled layers in parallel.
-func (c *HybridCache) SetBytes(ctx context.Context, key string, data []byte, ttl *time.Duration) error {
-	actual := c.opts.capTTL(derefTTL(ttl, c.opts.DefaultTTL))
+// SetBytes writes pre-serialized bytes to all enabled layers in parallel. It is
+// the low-level primitive behind Set/SetContext; prefer those unless you already
+// have the serialized representation. A ttl of 0 uses the layer's default.
+func (c *HybridCache) SetBytes(ctx context.Context, key string, data []byte, ttl time.Duration) error {
+	actual := c.opts.capTTL(defaultTTL(ttl, c.opts.DefaultTTL))
 
 	var wg sync.WaitGroup
 	for _, p := range c.providers {
 		wg.Add(1)
 		go func(pr Provider) {
 			defer wg.Done()
-			if err := pr.Set(ctx, key, data, &actual); err != nil {
+			if err := pr.Set(ctx, key, data, actual); err != nil {
 				c.logger.Printf("[hellnet-cache] set failed on %s for key %s: %v", pr.Name(), key, err)
 			}
 		}(p)
@@ -474,13 +476,13 @@ func (c *HybridCache) ExistsContext(ctx context.Context, key string) (bool, erro
 
 // GetOrSet retrieves a value or, if missing, runs the factory and caches the
 // result, using a default (background) context. Stampede-protected per key.
-func (c *HybridCache) GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl *time.Duration) error {
+func (c *HybridCache) GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl time.Duration) error {
 	return c.GetOrSetContext(context.Background(), key, out, factory, ttl)
 }
 
 // GetOrSetContext retrieves a value or, if missing, runs the factory and caches
 // the result. Stampede-protected per key.
-func (c *HybridCache) GetOrSetContext(ctx context.Context, key string, out any, factory func(context.Context) (any, error), ttl *time.Duration) error {
+func (c *HybridCache) GetOrSetContext(ctx context.Context, key string, out any, factory func(context.Context) (any, error), ttl time.Duration) error {
 	// fast path
 	if _, found := c.getRaw(ctx, key); found >= 0 {
 		return c.GetContext(ctx, key, out)
@@ -543,7 +545,7 @@ func (c *HybridCache) warm(key string, data []byte, foundAtIndex int) {
 		defer c.warming.Delete(key)
 		ttl := c.opts.L1DefaultTTL
 		for i := 0; i < foundAtIndex; i++ {
-			if err := c.providers[i].Set(context.Background(), key, data, &ttl); err != nil {
+			if err := c.providers[i].Set(context.Background(), key, data, ttl); err != nil {
 				c.logger.Printf("[hellnet-cache] warming failed for key %s: %v", key, err)
 			}
 		}
@@ -555,15 +557,15 @@ func (c *HybridCache) touch(key string, data []byte) {
 	ttl := c.opts.TouchTTL
 	for _, p := range c.providers {
 		go func(pr Provider) {
-			_ = pr.Set(context.Background(), key, data, &ttl)
+			_ = pr.Set(context.Background(), key, data, ttl)
 		}(p)
 	}
 }
 
-// derefTTL returns ttl when non-nil, else fallback.
-func derefTTL(ttl *time.Duration, fallback time.Duration) time.Duration {
-	if ttl != nil {
-		return *ttl
+// defaultTTL returns ttl when non-zero, else fallback.
+func defaultTTL(ttl, fallback time.Duration) time.Duration {
+	if ttl > 0 {
+		return ttl
 	}
 	return fallback
 }

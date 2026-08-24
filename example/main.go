@@ -17,7 +17,7 @@ import (
 	"log"
 	"time"
 
-	cache "github.com/guilhermelinosp/hellnet-lib-cache/cache"
+	"github.com/guilhermelinosp/hellnet-lib-cache/cache"
 )
 
 // Order is a sample domain type to cache.
@@ -26,11 +26,7 @@ type Order struct {
 	Name string `json:"name"`
 }
 
-func durationPtr(d time.Duration) *time.Duration { return &d }
-
 func main() {
-	// New() is fully responsible for envs. The cache methods use a default
-	// (background) context internally, so the application does not pass one.
 	c, err := cache.New()
 	if err != nil {
 		log.Fatalf("failed to build cache: %v", err)
@@ -38,7 +34,7 @@ func main() {
 	defer func() { _ = c.Close() }()
 
 	// Set with per-key TTL
-	if err := c.Set("order:1", Order{ID: "1", Name: "widget"}, durationPtr(time.Hour)); err != nil {
+	if err := c.Set("order:1", Order{ID: "1", Name: "widget"}, 30*time.Minute); err != nil {
 		log.Fatalf("set: %v", err)
 	}
 	fmt.Println("set order:1")
@@ -55,7 +51,7 @@ func main() {
 	err = c.GetOrSet("config:global", &cfg, func(context.Context) (any, error) {
 		fmt.Println("factory invoked for config:global")
 		return "v1.0.0", nil
-	}, durationPtr(24*time.Hour))
+	}, 24*time.Hour)
 	if err != nil {
 		log.Fatalf("getOrSet: %v", err)
 	}

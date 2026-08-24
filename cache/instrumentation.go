@@ -59,11 +59,11 @@ func (p *MemoryProvider) Get(_ context.Context, key string) ([]byte, error) {
 }
 
 // Set stores raw bytes with optional TTL.
-func (p *MemoryProvider) Set(_ context.Context, key string, value []byte, ttl *time.Duration) error {
-	actual := p.opts.capTTL(derefTTL(ttl, p.opts.L1DefaultTTL))
+func (p *MemoryProvider) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
+	actual := p.opts.capTTL(defaultTTL(ttl, p.opts.L1DefaultTTL))
 	p.cache.SetWithTTL(key, value, int64(len(value)), actual)
 	// ristretto processes sets asynchronously; Wait ensures the item is visible
-	// before returning, matching the synchronous .NET behavior.
+	// before returning, matching synchronous behavior.
 	p.cache.Wait()
 	p.metrics.RecordSet()
 	return nil
@@ -174,8 +174,8 @@ func (p *ExternalProvider) Get(ctx context.Context, key string) ([]byte, error) 
 }
 
 // Set stores raw bytes with optional TTL.
-func (p *ExternalProvider) Set(ctx context.Context, key string, value []byte, ttl *time.Duration) error {
-	actual := p.opts.capTTL(derefTTL(ttl, p.opts.DefaultTTL))
+func (p *ExternalProvider) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	actual := p.opts.capTTL(defaultTTL(ttl, p.opts.DefaultTTL))
 	_, err := p.breaker.Execute(func() (any, error) {
 		return nil, p.client.Set(ctx, p.opts.formatKey(key), value, actual).Err()
 	})

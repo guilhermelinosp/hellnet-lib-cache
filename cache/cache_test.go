@@ -26,7 +26,7 @@ func TestMemoryProvider_SetGet(t *testing.T) {
 	defer p.Close()
 
 	ctx := context.Background()
-	if err := p.Set(ctx, "k", []byte("v"), nil); err != nil {
+	if err := p.Set(ctx, "k", []byte("v"), 0); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	v, err := p.Get(ctx, "k")
@@ -54,7 +54,7 @@ func TestMemoryProvider_TTLExpiry(t *testing.T) {
 	defer p.Close()
 	ctx := context.Background()
 	ttl := 50 * time.Millisecond
-	if err := p.Set(ctx, "exp", []byte("x"), &ttl); err != nil {
+	if err := p.Set(ctx, "exp", []byte("x"), ttl); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(120 * time.Millisecond)
@@ -76,7 +76,7 @@ func TestHybrid_WriteThroughReadThrough(t *testing.T) {
 		Name string `json:"name"`
 	}
 	want := Order{ID: "1", Name: "test"}
-	if err := c.Set("order:1", want, nil); err != nil {
+	if err := c.Set("order:1", want, 0); err != nil {
 		t.Fatal(err)
 	}
 	var got Order
@@ -109,7 +109,7 @@ func TestHybrid_GetOrSet(t *testing.T) {
 	}
 
 	var out string
-	if err := c.GetOrSet("gs", &out, factory, nil); err != nil {
+	if err := c.GetOrSet("gs", &out, factory, 0); err != nil {
 		t.Fatal(err)
 	}
 	if out != "computed" {
@@ -120,7 +120,7 @@ func TestHybrid_GetOrSet(t *testing.T) {
 	}
 
 	// second call should hit cache, not call factory
-	if err := c.GetOrSet("gs", &out, factory, nil); err != nil {
+	if err := c.GetOrSet("gs", &out, factory, 0); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -148,7 +148,7 @@ func TestHybrid_Stampede(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var out string
-			_ = c.GetOrSet("stampede", &out, factory, nil)
+			_ = c.GetOrSet("stampede", &out, factory, 0)
 		}()
 	}
 	wg.Wait()
@@ -201,7 +201,7 @@ func TestOptions_PasswordOptional(t *testing.T) {
 	}
 }
 
-func TestOptions_DotNetDuration(t *testing.T) {
+func TestOptions_ClockDuration(t *testing.T) {
 	d, err := environments.ParseDuration("00:05:00")
 	if err != nil {
 		t.Fatal(err)
@@ -217,8 +217,6 @@ func TestOptions_DotNetDuration(t *testing.T) {
 		t.Fatalf("got %v want 24h", d)
 	}
 }
-func durationPtr(d time.Duration) *time.Duration { return &d }
-
 // optsL2Real returns options pointing at a real external backend (Redis/Valkey)
 // read from the environment. If HELLNET_CACHE_CONNECTION is unset, the test is
 // skipped — this keeps the unit suite hermetic while enabling real integration
@@ -260,7 +258,7 @@ func TestIntegration_L2SetGet(t *testing.T) {
 	}
 	want := Order{ID: "1", Name: "widget"}
 
-	if err := c.Set(key, want, durationPtr(30*time.Second)); err != nil {
+	if err := c.Set(key, want, 30*time.Second); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 
@@ -292,7 +290,7 @@ func TestIntegration_L2PersistenceAfterL1Eviction(t *testing.T) {
 	key := "it:l2only:cfg"
 	defer func() { _ = c.Remove(key) }()
 
-	if err := c.Set(key, "v2", durationPtr(time.Minute)); err != nil {
+	if err := c.Set(key, "v2", time.Minute); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	var out string
@@ -322,7 +320,7 @@ func TestIntegration_L2GetOrSet(t *testing.T) {
 	}
 
 	var out int
-	if err := c.GetOrSet(key, &out, factory, durationPtr(time.Minute)); err != nil {
+	if err := c.GetOrSet(key, &out, factory, time.Minute); err != nil {
 		t.Fatalf("getOrSet: %v", err)
 	}
 	if out != 42 || calls != 1 {
@@ -330,7 +328,7 @@ func TestIntegration_L2GetOrSet(t *testing.T) {
 	}
 
 	// Second call should hit cache (L1 or L2), not invoke factory.
-	if err := c.GetOrSet(key, &out, factory, durationPtr(time.Minute)); err != nil {
+	if err := c.GetOrSet(key, &out, factory, time.Minute); err != nil {
 		t.Fatalf("getOrSet 2: %v", err)
 	}
 	if calls != 1 {
@@ -347,7 +345,7 @@ func TestIntegration_L2Remove(t *testing.T) {
 	defer c.Close()
 
 	key := "it:rm:key"
-	if err := c.Set(key, "x", durationPtr(time.Minute)); err != nil {
+	if err := c.Set(key, "x", time.Minute); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if err := c.Remove(key); err != nil {
@@ -425,7 +423,7 @@ func TestNew_DegradesToMemoryOnlyWithoutConnection(t *testing.T) {
 	}
 	defer c.Close()
 
-	if err := c.Set("k", "v", durationPtr(time.Second)); err != nil {
+	if err := c.Set("k", "v", time.Second); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	var out string
