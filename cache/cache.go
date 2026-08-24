@@ -38,12 +38,14 @@ type Serializer interface {
 }
 
 // Cache is the multi-layer cache abstraction. Write-through, read-through.
+// The methods use a default (background) context; the *Context variants accept
+// a caller-supplied context for cancellation/deadline control.
 type Cache interface {
-	Get(ctx context.Context, key string, out any) error
-	Set(ctx context.Context, key string, value any, ttl *time.Duration) error
-	Remove(ctx context.Context, key string) error
-	Exists(ctx context.Context, key string) (bool, error)
-	GetOrSet(ctx context.Context, key string, out any, factory func(context.Context) (any, error), ttl *time.Duration) error
+	Get(key string, out any) error
+	Set(key string, value any, ttl *time.Duration) error
+	Remove(key string) error
+	Exists(key string) (bool, error)
+	GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl *time.Duration) error
 	Close() error
 }
 
@@ -359,8 +361,15 @@ func MustNew(opts ...Options) *HybridCache {
 	return c
 }
 
-// Get retrieves a value by key. Returns the zero value if not found in any layer.
-func (c *HybridCache) Get(ctx context.Context, key string, out any) error {
+// Get retrieves a value by key using a default (background) context. Returns
+// the zero value if not found in any layer.
+func (c *HybridCache) Get(key string, out any) error {
+	return c.GetContext(context.Background(), key, out)
+}
+
+// GetContext retrieves a value by key. Returns the zero value if not found in
+// any layer.
+func (c *HybridCache) GetContext(ctx context.Context, key string, out any) error {
 	data, foundAtIndex := c.getRaw(ctx, key)
 	if foundAtIndex < 0 || data == nil {
 		return nil // not found; out stays zero value
@@ -389,8 +398,14 @@ func (c *HybridCache) getRaw(ctx context.Context, key string) (data []byte, foun
 	return nil, -1
 }
 
-// Set stores a value with optional TTL, written to all enabled layers.
-func (c *HybridCache) Set(ctx context.Context, key string, value any, ttl *time.Duration) error {
+// Set stores a value with optional TTL, written to all enabled layers, using a
+// default (background) context.
+func (c *HybridCache) Set(key string, value any, ttl *time.Duration) error {
+	return c.SetContext(context.Background(), key, value, ttl)
+}
+
+// SetContext stores a value with optional TTL, written to all enabled layers.
+func (c *HybridCache) SetContext(ctx context.Context, key string, value any, ttl *time.Duration) error {
 	data, err := c.serializer.Serialize(value)
 	if err != nil {
 		return err
@@ -416,8 +431,13 @@ func (c *HybridCache) SetBytes(ctx context.Context, key string, data []byte, ttl
 	return nil
 }
 
-// Remove deletes a key from all layers.
-func (c *HybridCache) Remove(ctx context.Context, key string) error {
+// Remove deletes a key from all layers using a default (background) context.
+func (c *HybridCache) Remove(key string) error {
+	return c.RemoveContext(context.Background(), key)
+}
+
+// RemoveContext deletes a key from all layers.
+func (c *HybridCache) RemoveContext(ctx context.Context, key string) error {
 	var wg sync.WaitGroup
 	for _, p := range c.providers {
 		wg.Add(1)
@@ -432,8 +452,14 @@ func (c *HybridCache) Remove(ctx context.Context, key string) error {
 	return nil
 }
 
-// Exists reports whether a key exists in any layer.
-func (c *HybridCache) Exists(ctx context.Context, key string) (bool, error) {
+// Exists reports whether a key exists in any layer using a default (background)
+// context.
+func (c *HybridCache) Exists(key string) (bool, error) {
+	return c.ExistsContext(context.Background(), key)
+}
+
+// ExistsContext reports whether a key exists in any layer.
+func (c *HybridCache) ExistsContext(ctx context.Context, key string) (bool, error) {
 	for _, p := range c.providers {
 		ok, err := p.Exists(ctx, key)
 		if err != nil {
@@ -447,11 +473,17 @@ func (c *HybridCache) Exists(ctx context.Context, key string) (bool, error) {
 }
 
 // GetOrSet retrieves a value or, if missing, runs the factory and caches the
-// result. Stampede-protected per key.
-func (c *HybridCache) GetOrSet(ctx context.Context, key string, out any, factory func(context.Context) (any, error), ttl *time.Duration) error {
+// result, using a default (background) context. Stampede-protected per key.
+func (c *HybridCache) GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl *time.Duration) error {
+	return c.GetOrSetContext(context.Background(), key, out, factory, ttl)
+}
+
+// GetOrSetContext retrieves a value or, if missing, runs the factory and caches
+// the result. Stampede-protected per key.
+func (c *HybridCache) GetOrSetContext(ctx context.Context, key string, out any, factory func(context.Context) (any, error), ttl *time.Duration) error {
 	// fast path
 	if _, found := c.getRaw(ctx, key); found >= 0 {
-		return c.Get(ctx, key, out)
+		return c.GetContext(ctx, key, out)
 	}
 
 	// stampede protection
@@ -464,7 +496,7 @@ func (c *HybridCache) GetOrSet(ctx context.Context, key string, out any, factory
 
 	// double-check after acquiring lock
 	if _, found := c.getRaw(ctx, key); found >= 0 {
-		return c.Get(ctx, key, out)
+		return c.GetContext(ctx, key, out)
 	}
 
 	value, err := factory(ctx)
