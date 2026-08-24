@@ -1,9 +1,7 @@
 # hellnet-lib-cache
 
-> Multi-layer cache library for Go — L1 (in-process memory), L2 (Valkey/Redis)
-> and L3 (optional external, pluggable).
->
-> Faithful Go port of [`hellnet-dep-cache`](https://github.com/guilhermelinosp/hellnet-dep-cache) (.NET).
+> Multi-layer cache library for Go — L1 (in-process memory), L2 (external,
+> pluggable distributed backend).
 
 Write-through, read-through, stampede protection, env-first configuration and
 graceful degradation on backend failures.
@@ -26,44 +24,38 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
-	cache "github.com/guilhermelinosp/hellnet-lib-cache"
+	cache "github.com/guilhermelinosp/hellnet-lib-cache/cache"
 )
 
 func main() {
-	// Reads HELLNET_CACHE_VALKEY_CONNECTION + HELLNET_CACHE_VALKEY_PASSWORD.
-	// Panics at startup if they are missing.
-	c := cache.MustFromEnv()
-	c = cache.MustNew(cache.MustFromEnv()) // build the cache from env options
-	_ = c
-
-	// Or in one step:
-	c, err := cache.New(cache.MustFromEnv())
+	// New() loads .env (HELLNET_CACHE_*), validates and decides L1/L2.
+	// Methods use a default (background) context internally.
+	c, err := cache.New()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer c.Close()
 
-	ctx := context.Background()
-
 	// Set with per-key TTL
-	if err := c.Set(ctx, "order:1", Order{ID: "1", Name: "x"}, durationPtr(1*time.Hour)); err != nil {
+	if err := c.Set("order:1", Order{ID: "1", Name: "x"}, time.Hour); err != nil {
 		log.Fatal(err)
 	}
 
 	// Get
 	var o Order
-	_ = c.Get(ctx, "order:1", &o)
+	_ = c.Get("order:1", &o)
 
 	// GetOrSet — stampede-protected
 	var cfg Config
-	_ = c.GetOrSet(ctx, "config:global", &cfg, func(context.Context) (any, error) {
+	_ = c.GetOrSet("config:global", &cfg, func(context.Context) (any, error) {
 		return loadConfig(), nil
-	}, nil)
+	}, 0)
 
 	// Remove / Exists
-	_ = c.Remove(ctx, "order:1")
-	exists, _ := c.Exists(ctx, "order:1")
+	_ = c.Remove("order:1")
+	exists, _ := c.Exists("order:1")
 	_ = exists
 }
 ```
@@ -72,10 +64,10 @@ func main() {
 
 ```go
 opts := cache.Options{
-	EnableL1:      true,
-	EnableL2:      true,
-	ValkeyConnection: "valkey.hellnet.com.br:6379",
-	ValkeyPassword:   "hellnet2026",
+	EnableL1:   true,
+	EnableL2:   true,
+	Connection: "localhost:6379",
+	Password:   "your-password", // optional
 }
 c, err := cache.New(opts)
 ```
@@ -83,8 +75,8 @@ c, err := cache.New(opts)
 ### Minimal env
 
 ```bash
-export HELLNET_CACHE_VALKEY_CONNECTION=valkey.hellnet.com.br:6379
-export HELLNET_CACHE_VALKEY_PASSWORD=hellnet2026
+export HELLNET_CACHE_CONNECTION=localhost:6379
+# optional: export HELLNET_CACHE_PASSWORD=...
 ```
 
 ## Usage
@@ -92,44 +84,59 @@ export HELLNET_CACHE_VALKEY_PASSWORD=hellnet2026
 ```go
 type OrderService struct{ cache cache.Cache }
 
-func (s *OrderService) SetOrder(ctx context.Context, o Order) error {
-	return s.cache.Set(ctx, "order:"+o.ID, o, durationPtr(time.Hour))
+func (s *OrderService) SetOrder(o Order) error {
+	return s.cache.Set("order:"+o.ID, o, time.Hour)
 }
 
-func (s *OrderService) GetOrder(ctx context.Context, id string) (Order, error) {
+func (s *OrderService) GetOrder(id string) (Order, error) {
 	var o Order
-	if err := s.cache.Get(ctx, "order:"+id, &o); err != nil {
+	if err := s.cache.Get("order:"+id, &o); err != nil {
 		return o, err
 	}
 	return o, nil
 }
 
-func (s *OrderService) Invalidate(ctx context.Context, id string) error {
-	return s.cache.Remove(ctx, "order:"+id)
+func (s *OrderService) Invalidate(id string) error {
+	return s.cache.Remove("order:" + id)
 }
 ```
 
+For cancellation/deadline control, use the `*Context` variants
+(`GetContext`, `SetContext`, `GetOrSetContext`, `RemoveContext`, `ExistsContext`)
+which accept a `context.Context`:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+
+if err := c.SetContext(ctx, "k", v, time.Minute); err != nil {
+    // erro se o contexto expirar durante a operação
+}
+```
+
+Additional runnable examples are available in the package documentation
+(`go doc github.com/guilhermelinosp/hellnet-lib-cache/cache`).
+
 ## Layers
 
-| Layer | Provider            | Default TTL | Failure behavior                |
-|-------|---------------------|-------------|---------------------------------|
-| L1    | `MemoryProvider`    | 5 min       | Always healthy                  |
-| L2    | `ValkeyProvider`    | 30 min      | Graceful — returns nil, logs    |
-| L3    | `ExternalProvider`  | 15 min      | Disabled by default             |
+| Layer | Provider           | Default TTL | Failure behavior                |
+|-------|--------------------|-------------|---------------------------------|
+| L1    | `MemoryProvider`   | 5 min       | Always healthy                  |
+| L2    | `ExternalProvider` | 30 min      | Graceful — returns nil, logs    |
 
 ### Read-through
 
 ```
-Get("key") → L1 → L2 → L3 → miss/nil
+Get("key") → L1 → L2 → miss/nil
 ```
 
-On a hit in L2/L3, lower layers are populated automatically (async, deduplicated
+On a hit in L2, lower layers (L1) are populated automatically (async, deduplicated
 warming).
 
 ### Write-through
 
 ```
-Set("key") → L1.Set + L2.Set + L3.Set in parallel (WaitGroup)
+Set("key") → L1.Set + L2.Set in parallel (WaitGroup)
 ```
 
 ## Per-key TTL
@@ -137,10 +144,10 @@ Set("key") → L1.Set + L2.Set + L3.Set in parallel (WaitGroup)
 Each `Set`/`GetOrSet` accepts `*time.Duration` TTL. When nil, the per-layer
 fallback is used:
 
-| Call              | L1        | L2        | L3        |
-|-------------------|-----------|-----------|-----------|
-| `Set(k, v)`       | 5min      | 30min     | 15min     |
-| `Set(k, v, 1h)`   | 1h        | 1h        | 1h        |
+| Call              | L1        | L2        |
+|-------------------|-----------|-----------|
+| `Set(k, v)`       | 5min      | 30min     |
+| `Set(k, v, 1h)`   | 1h        | 1h        |
 
 L1 uses **absolute expiration** by default. Sliding is opt-in via
 `L1SlidingExpiration`.
@@ -167,31 +174,31 @@ L1 uses **absolute expiration** by default. Sliding is opt-in via
 
 ### Env vars (`HELLNET_CACHE_*`)
 
-| Env var                              | Default              | Description                  |
-|--------------------------------------|----------------------|------------------------------|
-| `VALKEY_CONNECTION`                   | *(required)*         | Valkey host:port             |
-| `VALKEY_PASSWORD`                     | *(required)*         | Valkey password              |
-| `VALKEY_KEY_PREFIX`                   | `hellnet:cache:`     | Key prefix in Valkey         |
-| `L1_DEFAULT_TTL`                     | `00:05:00`           | L1 fallback TTL              |
-| `DEFAULT_TTL`                        | `00:30:00`           | Global fallback TTL          |
-| `MAX_TTL`                            | `24:00:00`           | Safety cap                   |
-| `TOUCH_ON_READ`                      | `false`              | Auto-extend TTL on hit       |
-| `TOUCH_TTL`                          | `00:10:00`           | Extension amount             |
-| `L1_SLIDING_EXPIRATION`              | `false`              | Sliding vs Absolute          |
-| `VALKEY_RETRY_COUNT`                 | `2`                  | Max retry attempts           |
-| `VALKEY_RETRY_BASE_DELAY_MS`         | `200`                | Base retry delay             |
-| `VALKEY_CB_FAILURES`                 | `5`                  | Circuit breaker threshold    |
-| `VALKEY_CB_DURATION_SEC`             | `30`                 | Circuit breaker duration     |
-| `ENABLE_L1`                          | `true`               | Enable L1                    |
-| `ENABLE_L2`                          | `true`               | Enable L2                    |
-| `ENABLE_EXTERNAL`                    | `false`              | Enable L3                    |
+| Env var                            | Default              | Description                    |
+|------------------------------------|----------------------|--------------------------------|
+| `CONNECTION`                       | *(required)*         | External backend host:port     |
+| `PASSWORD`                         | *(optional)*         | External backend password (empty = no auth) |
+| `KEY_PREFIX`                       | `hellnet:cache:`     | Key prefix in backend          |
+| `L1_DEFAULT_TTL`                   | `00:05:00`           | L1 fallback TTL                |
+| `DEFAULT_TTL`                      | `00:30:00`           | Global fallback TTL            |
+| `MAX_TTL`                          | `24:00:00`           | Safety cap                     |
+| `TOUCH_ON_READ`                    | `false`              | Auto-extend TTL on hit         |
+| `TOUCH_TTL`                        | `00:10:00`           | Extension amount               |
+| `L1_SLIDING_EXPIRATION`            | `false`              | Sliding vs Absolute            |
+| `RETRY_COUNT`                      | `2`                  | Max retry attempts             |
+| `RETRY_BASE_DELAY_MS`              | `200`                | Base retry delay               |
+| `CB_FAILURES`                      | `5`                  | Circuit breaker threshold      |
+| `CB_DURATION_SEC`                  | `30`                 | Circuit breaker duration       |
+| `ENABLE_L1`                        | `true`               | Enable L1                      |
+| `ENABLE_L2`                        | `true`               | Enable L2                      |
 
-Env vars accept Go duration syntax (`5m`, `30s`) or .NET-style (`00:05:00`).
+Env vars accept Go duration syntax (`5m`, `30s`) or clock-style (`00:05:00`).
 
 ## Dependencies
 
 - `github.com/dgraph-io/ristretto/v2` — L1 memory provider
-- `github.com/redis/go-redis/v9` — L2 Valkey provider
+- `github.com/guilhermelinosp/hellnet-lib-environments` — env binding
+- `github.com/redis/go-redis/v9` — L2 external backend
 - `github.com/sony/gobreaker` — Circuit breaker (L2 resilience)
 
 ## License

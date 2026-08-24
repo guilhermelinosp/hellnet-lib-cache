@@ -26,7 +26,7 @@ func TestMemoryProvider_SetGet(t *testing.T) {
 	defer p.Close()
 
 	ctx := context.Background()
-	if err := p.Set(ctx, "k", []byte("v"), nil); err != nil {
+	if err := p.Set(ctx, "k", []byte("v"), 0); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	v, err := p.Get(ctx, "k")
@@ -54,7 +54,7 @@ func TestMemoryProvider_TTLExpiry(t *testing.T) {
 	defer p.Close()
 	ctx := context.Background()
 	ttl := 50 * time.Millisecond
-	if err := p.Set(ctx, "exp", []byte("x"), &ttl); err != nil {
+	if err := p.Set(ctx, "exp", []byte("x"), ttl); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(120 * time.Millisecond)
@@ -70,31 +70,30 @@ func TestHybrid_WriteThroughReadThrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	ctx := context.Background()
 
 	type Order struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
 	want := Order{ID: "1", Name: "test"}
-	if err := c.Set(ctx, "order:1", want, nil); err != nil {
+	if err := c.Set("order:1", want, 0); err != nil {
 		t.Fatal(err)
 	}
 	var got Order
-	if err := c.Get(ctx, "order:1", &got); err != nil {
+	if err := c.Get("order:1", &got); err != nil {
 		t.Fatal(err)
 	}
 	if got != want {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
 
-	if ok, _ := c.Exists(ctx, "order:1"); !ok {
+	if ok, _ := c.Exists("order:1"); !ok {
 		t.Fatal("expected exists")
 	}
-	if err := c.Remove(ctx, "order:1"); err != nil {
+	if err := c.Remove("order:1"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := c.Exists(ctx, "order:1"); ok {
+	if ok, _ := c.Exists("order:1"); ok {
 		t.Fatal("expected not exists after remove")
 	}
 }
@@ -102,7 +101,6 @@ func TestHybrid_WriteThroughReadThrough(t *testing.T) {
 func TestHybrid_GetOrSet(t *testing.T) {
 	c, _ := New(optsL1Only())
 	defer c.Close()
-	ctx := context.Background()
 
 	calls := 0
 	factory := func(context.Context) (any, error) {
@@ -111,7 +109,7 @@ func TestHybrid_GetOrSet(t *testing.T) {
 	}
 
 	var out string
-	if err := c.GetOrSet(ctx, "gs", &out, factory, nil); err != nil {
+	if err := c.GetOrSet("gs", &out, factory, 0); err != nil {
 		t.Fatal(err)
 	}
 	if out != "computed" {
@@ -122,7 +120,7 @@ func TestHybrid_GetOrSet(t *testing.T) {
 	}
 
 	// second call should hit cache, not call factory
-	if err := c.GetOrSet(ctx, "gs", &out, factory, nil); err != nil {
+	if err := c.GetOrSet("gs", &out, factory, 0); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -133,7 +131,6 @@ func TestHybrid_GetOrSet(t *testing.T) {
 func TestHybrid_Stampede(t *testing.T) {
 	c, _ := New(optsL1Only())
 	defer c.Close()
-	ctx := context.Background()
 
 	var mu sync.Mutex
 	calls := 0
@@ -151,7 +148,7 @@ func TestHybrid_Stampede(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var out string
-			_ = c.GetOrSet(ctx, "stampede", &out, factory, nil)
+			_ = c.GetOrSet("stampede", &out, factory, 0)
 		}()
 	}
 	wg.Wait()
@@ -204,7 +201,7 @@ func TestOptions_PasswordOptional(t *testing.T) {
 	}
 }
 
-func TestOptions_DotNetDuration(t *testing.T) {
+func TestOptions_ClockDuration(t *testing.T) {
 	d, err := environments.ParseDuration("00:05:00")
 	if err != nil {
 		t.Fatal(err)
@@ -220,8 +217,6 @@ func TestOptions_DotNetDuration(t *testing.T) {
 		t.Fatalf("got %v want 24h", d)
 	}
 }
-func durationPtr(d time.Duration) *time.Duration { return &d }
-
 // optsL2Real returns options pointing at a real external backend (Redis/Valkey)
 // read from the environment. If HELLNET_CACHE_CONNECTION is unset, the test is
 // skipped — this keeps the unit suite hermetic while enabling real integration
@@ -254,9 +249,8 @@ func TestIntegration_L2SetGet(t *testing.T) {
 	}
 	defer c.Close()
 
-	ctx := context.Background()
 	key := "it:order:1"
-	defer func() { _ = c.Remove(ctx, key) }()
+	defer func() { _ = c.Remove(key) }()
 
 	type Order struct {
 		ID   string `json:"id"`
@@ -264,20 +258,20 @@ func TestIntegration_L2SetGet(t *testing.T) {
 	}
 	want := Order{ID: "1", Name: "widget"}
 
-	if err := c.Set(ctx, key, want, durationPtr(30*time.Second)); err != nil {
+	if err := c.Set(key, want, 30*time.Second); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 
 	// L1 should have it immediately; L2 in parallel too.
 	var got Order
-	if err := c.Get(ctx, key, &got); err != nil {
+	if err := c.Get(key, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if got != want {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
 
-	exists, err := c.Exists(ctx, key)
+	exists, err := c.Exists(key)
 	if err != nil || !exists {
 		t.Fatalf("exists=%v err=%v", exists, err)
 	}
@@ -293,15 +287,14 @@ func TestIntegration_L2PersistenceAfterL1Eviction(t *testing.T) {
 	}
 	defer c.Close()
 
-	ctx := context.Background()
 	key := "it:l2only:cfg"
-	defer func() { _ = c.Remove(ctx, key) }()
+	defer func() { _ = c.Remove(key) }()
 
-	if err := c.Set(ctx, key, "v2", durationPtr(time.Minute)); err != nil {
+	if err := c.Set(key, "v2", time.Minute); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	var out string
-	if err := c.Get(ctx, key, &out); err != nil {
+	if err := c.Get(key, &out); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if out != "v2" {
@@ -317,9 +310,8 @@ func TestIntegration_L2GetOrSet(t *testing.T) {
 	}
 	defer c.Close()
 
-	ctx := context.Background()
 	key := "it:gs:price"
-	defer func() { _ = c.Remove(ctx, key) }()
+	defer func() { _ = c.Remove(key) }()
 
 	calls := 0
 	factory := func(context.Context) (any, error) {
@@ -328,7 +320,7 @@ func TestIntegration_L2GetOrSet(t *testing.T) {
 	}
 
 	var out int
-	if err := c.GetOrSet(ctx, key, &out, factory, durationPtr(time.Minute)); err != nil {
+	if err := c.GetOrSet(key, &out, factory, time.Minute); err != nil {
 		t.Fatalf("getOrSet: %v", err)
 	}
 	if out != 42 || calls != 1 {
@@ -336,7 +328,7 @@ func TestIntegration_L2GetOrSet(t *testing.T) {
 	}
 
 	// Second call should hit cache (L1 or L2), not invoke factory.
-	if err := c.GetOrSet(ctx, key, &out, factory, durationPtr(time.Minute)); err != nil {
+	if err := c.GetOrSet(key, &out, factory, time.Minute); err != nil {
 		t.Fatalf("getOrSet 2: %v", err)
 	}
 	if calls != 1 {
@@ -352,15 +344,14 @@ func TestIntegration_L2Remove(t *testing.T) {
 	}
 	defer c.Close()
 
-	ctx := context.Background()
 	key := "it:rm:key"
-	if err := c.Set(ctx, key, "x", durationPtr(time.Minute)); err != nil {
+	if err := c.Set(key, "x", time.Minute); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if err := c.Remove(ctx, key); err != nil {
+	if err := c.Remove(key); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	exists, _ := c.Exists(ctx, key)
+	exists, _ := c.Exists(key)
 	if exists {
 		t.Fatal("expected not exists after remove")
 	}
@@ -432,12 +423,11 @@ func TestNew_DegradesToMemoryOnlyWithoutConnection(t *testing.T) {
 	}
 	defer c.Close()
 
-	ctx := context.Background()
-	if err := c.Set(ctx, "k", "v", durationPtr(time.Second)); err != nil {
+	if err := c.Set("k", "v", time.Second); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	var out string
-	if err := c.Get(ctx, "k", &out); err != nil {
+	if err := c.Get("k", &out); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if out != "v" {

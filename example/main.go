@@ -17,7 +17,7 @@ import (
 	"log"
 	"time"
 
-	cache "github.com/guilhermelinosp/hellnet-lib-cache/cache"
+	"github.com/guilhermelinosp/hellnet-lib-cache/cache"
 )
 
 // Order is a sample domain type to cache.
@@ -26,11 +26,7 @@ type Order struct {
 	Name string `json:"name"`
 }
 
-func durationPtr(d time.Duration) *time.Duration { return &d }
-
 func main() {
-	ctx := context.Background()
-
 	c, err := cache.New()
 	if err != nil {
 		log.Fatalf("failed to build cache: %v", err)
@@ -38,33 +34,33 @@ func main() {
 	defer func() { _ = c.Close() }()
 
 	// Set with per-key TTL
-	if err := c.Set(ctx, "order:1", Order{ID: "1", Name: "widget"}, durationPtr(time.Hour)); err != nil {
+	if err := c.Set("order:1", Order{ID: "1", Name: "widget"}, 30*time.Minute); err != nil {
 		log.Fatalf("set: %v", err)
 	}
 	fmt.Println("set order:1")
 
 	// Get
 	var o Order
-	if err := c.Get(ctx, "order:1", &o); err != nil {
+	if err := c.Get("order:1", &o); err != nil {
 		log.Fatalf("get: %v", err)
 	}
 	fmt.Printf("got order:1 -> %+v\n", o)
 
 	// GetOrSet — stampede-protected factory
 	var cfg string
-	err = c.GetOrSet(ctx, "config:global", &cfg, func(context.Context) (any, error) {
+	err = c.GetOrSet("config:global", &cfg, func(context.Context) (any, error) {
 		fmt.Println("factory invoked for config:global")
 		return "v1.0.0", nil
-	}, durationPtr(24*time.Hour))
+	}, 24*time.Hour)
 	if err != nil {
 		log.Fatalf("getOrSet: %v", err)
 	}
 	fmt.Printf("config:global -> %s\n", cfg)
 
 	// Exists / Remove
-	ok, _ := c.Exists(ctx, "order:1")
+	ok, _ := c.Exists("order:1")
 	fmt.Printf("exists order:1 -> %v\n", ok)
-	_ = c.Remove(ctx, "order:1")
-	ok, _ = c.Exists(ctx, "order:1")
+	_ = c.Remove("order:1")
+	ok, _ = c.Exists("order:1")
 	fmt.Printf("exists order:1 after remove -> %v\n", ok)
 }
