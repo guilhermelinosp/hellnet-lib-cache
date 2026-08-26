@@ -1,5 +1,67 @@
 # hellnet-lib-cache
 
+## 🧒 Understand it like you're 15
+
+*Seção introdutória em português para quem está começando — o restante deste
+README segue em inglês.*
+
+### A analogia
+
+Cache é a **geladeira da casa**. O banco de dados é o **mercado**:
+
+- Ir ao mercado toda hora gasta tempo e dinheiro — assim como consultar o banco
+  a cada requisição.
+- Guardar em casa o que você usa muito (leite, pão) torna tudo instantâneo.
+- **L1** = a geladeira: fica na própria cozinha (memória do processo),
+  rapidíssima, mas com espaço pequeno.
+- **L2** = a despensa: fica no corredor de fora (Redis), muito maior, só um
+  pouco mais longe.
+
+### O problema que resolve
+
+Aplicações repetem as mesmas perguntas ao banco milhares de vezes ("tem
+leite?" — mil vezes por segundo). O cache responde **da memória**: em vez de ir
+ao mercado a cada pergunta, consulta primeiro a geladeira (L1) e depois a
+despensa (L2). E se o mercado fechar (banco de dados cair), os dados quentes
+continuam servíveis — a casa não para.
+
+### Mini-dicionário
+
+| Termo         | Tradução pra vida real                                                                                     |
+|---------------|------------------------------------------------------------------------------------------------------------|
+| **hit**       | "Tinha na geladeira!" — achou no cache, resposta instantânea.                                               |
+| **miss**      | "Acabou — fui ao mercado." Não estava em nenhuma camada; buscou direto na origem.                           |
+| **TTL**       | A validade da embalagem: expirou, joga fora e busca um novo.                                                 |
+| **eviction**  | Geladeira lotada: jogar fora o mais velho pra caber o novo.                                                  |
+| **GetOrSet**  | Checa a geladeira; se estiver vazia, UMA pessoa vai ao mercado e divide com todos — os outros esperam a sacola em vez de ir juntos. |
+| **stampede**  | Todo mundo correndo pro mercado porque acabou o leite — a lib impede isso por padrão.                        |
+| **Healthy**   | "A geladeira e a despensa estão funcionando?" (`c.Healthy()` agrega a saúde das duas camadas).               |
+
+### Your first lines
+
+```go
+ctx := context.Background()
+c, err := cache.New(ctx) // carrega HELLNET_CACHE_* sozinho
+
+var menu map[string]string
+err = c.GetOrSet("menu-de-hoje", &menu, func(ctx context.Context) (any, error) {
+	return pratoDoDia(), nil // só executa se der miss
+}, time.Hour)
+```
+
+Linha por linha:
+
+1. `ctx := context.Background()` — o contexto entra **uma única vez**, aqui. A
+   biblioteca guarda e propaga internamente; nenhuma operação recebe contexto.
+2. `cache.New(ctx)` — monta a geladeira (L1) e a despensa (L2) lendo as
+   variáveis `HELLNET_CACHE_*` sozinho. Toda operação roda com timeout interno
+   (`Options.OperationTimeout`, padrão `5s`).
+3. `GetOrSet("menu-de-hoje", ...)` — checa geladeira e despensa pela chave.
+   Achou (**hit**)? Devolve pronto. Acabou (**miss**)? **UMA** pessoa cozinha (a
+   factory) e divide com todos — os demais esperam a sacola em vez de correr
+   juntos pro mercado (zero *stampede*).
+4. O último argumento é o TTL — a validade individual desse prato no cardápio.
+
 > Multi-layer cache library for Go — L1 (in-process memory), L2 (external,
 > pluggable distributed backend).
 
@@ -131,6 +193,8 @@ defer c.Close() // cancels the internally captured context as well
 Additional runnable examples are available in the package documentation
 (`go doc github.com/guilhermelinosp/hellnet-lib-cache/cache`).
 
+> 🧒 L1 é a geladeira da cozinha; L2 é a despensa no corredor de fora.
+
 ## Layers
 
 | Layer | Provider           | Default TTL | Failure behavior                |
@@ -153,6 +217,8 @@ warming).
 Set("key") → L1.Set + L2.Set in parallel (WaitGroup)
 ```
 
+> 🧒 Cada embalagem tem a própria validade.
+
 ## Per-key TTL
 
 Each `Set`/`GetOrSet` accepts a `time.Duration` TTL. When `0`, the per-layer
@@ -166,6 +232,8 @@ fallback is used:
 L1 uses **absolute expiration** by default. Sliding is opt-in via
 `L1SlidingExpiration`.
 
+> 🧒 Acabou o leite? Uma só pessoa vai ao mercado — as outras esperam a sacola.
+
 ## Concurrency
 
 | Mechanism           | Prevents                                            |
@@ -175,6 +243,8 @@ L1 uses **absolute expiration** by default. Sliding is opt-in via
 | Warming dedup       | Only one warming task per key at a time             |
 | Touch-on-read       | `TouchOnRead=true` extends TTL on all layers on hit |
 | Parallel writes     | `WaitGroup` — Set/Remove across all layers          |
+
+> 🧒 Mercado fechou? A cozinha segue funcionando com o que tem em casa.
 
 ## Resilience (L2)
 
