@@ -24,15 +24,21 @@ package main
 import (
 	"context"
 	"log"
+	"os"
+	"os/signal"
 	"time"
 
 	cache "github.com/guilhermelinosp/hellnet-lib-cache/cache"
 )
 
 func main() {
+	// The application context is passed ONCE at construction — the library
+	// captures and propagates it internally. Operations never take a context.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	// New() loads .env (HELLNET_CACHE_*), validates and decides L1/L2.
-	// Methods use a default (background) context internally.
-	c, err := cache.New()
+	c, err := cache.New(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -69,7 +75,7 @@ opts := cache.Options{
 	Connection: "localhost:6379",
 	Password:   "your-password", // optional
 }
-c, err := cache.New(opts)
+c, err := cache.New(ctx, opts)
 ```
 
 ### Minimal env
@@ -101,17 +107,25 @@ func (s *OrderService) Invalidate(id string) error {
 }
 ```
 
-For cancellation/deadline control, use the `*Context` variants
-(`GetContext`, `SetContext`, `GetOrSetContext`, `RemoveContext`, `ExistsContext`)
-which accept a `context.Context`:
+### Context & timeouts
+
+The context given to `New`/`MustNew` is captured once and propagated internally
+to every operation and background goroutine (warming/touch). There are no
+`*Context` method variants. Each operation runs under an internally derived
+timeout bounded by `OperationTimeout` (default `5s`, env-tunable via
+`HELLNET_CACHE_OPERATION_TIMEOUT_MS`); L2 network calls additionally honor
+`ConnectTimeout`/`ReadTimeout`. Shutdown is coherent: cancelling the caller's
+context or calling `Close()` aborts all in-flight library work.
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-defer cancel()
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
 
-if err := c.SetContext(ctx, "k", v, time.Minute); err != nil {
-    // erro se o contexto expirar durante a operação
+c, err := cache.New(ctx)
+if err != nil {
+    log.Fatal(err)
 }
+defer c.Close() // cancels the internally captured context as well
 ```
 
 Additional runnable examples are available in the package documentation
@@ -141,7 +155,7 @@ Set("key") → L1.Set + L2.Set in parallel (WaitGroup)
 
 ## Per-key TTL
 
-Each `Set`/`GetOrSet` accepts `*time.Duration` TTL. When nil, the per-layer
+Each `Set`/`GetOrSet` accepts a `time.Duration` TTL. When `0`, the per-layer
 fallback is used:
 
 | Call              | L1        | L2        |
@@ -189,6 +203,7 @@ L1 uses **absolute expiration** by default. Sliding is opt-in via
 | `RETRY_BASE_DELAY_MS`              | `200`                | Base retry delay               |
 | `CB_FAILURES`                      | `5`                  | Circuit breaker threshold      |
 | `CB_DURATION_SEC`                  | `30`                 | Circuit breaker duration       |
+| `OPERATION_TIMEOUT_MS`             | `5000`               | Per-operation timeout (integer ms) |
 | `ENABLE_L1`                        | `true`               | Enable L1                      |
 | `ENABLE_L2`                        | `true`               | Enable L2                      |
 

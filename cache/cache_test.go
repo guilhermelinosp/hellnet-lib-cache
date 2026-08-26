@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -25,11 +26,10 @@ func TestMemoryProvider_SetGet(t *testing.T) {
 	}
 	defer p.Close()
 
-	ctx := context.Background()
-	if err := p.Set(ctx, "k", []byte("v"), 0); err != nil {
+	if err := p.Set("k", []byte("v"), 0); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	v, err := p.Get(ctx, "k")
+	v, err := p.Get("k")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -37,13 +37,13 @@ func TestMemoryProvider_SetGet(t *testing.T) {
 		t.Fatalf("got %q want v", v)
 	}
 
-	if ok, _ := p.Exists(ctx, "k"); !ok {
+	if ok, _ := p.Exists("k"); !ok {
 		t.Fatal("expected key to exist")
 	}
-	if err := p.Remove(ctx, "k"); err != nil {
+	if err := p.Remove("k"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	v, _ = p.Get(ctx, "k")
+	v, _ = p.Get("k")
 	if v != nil {
 		t.Fatalf("expected miss after remove, got %q", v)
 	}
@@ -52,20 +52,19 @@ func TestMemoryProvider_SetGet(t *testing.T) {
 func TestMemoryProvider_TTLExpiry(t *testing.T) {
 	p, _ := NewMemoryProvider(optsL1Only())
 	defer p.Close()
-	ctx := context.Background()
 	ttl := 50 * time.Millisecond
-	if err := p.Set(ctx, "exp", []byte("x"), ttl); err != nil {
+	if err := p.Set("exp", []byte("x"), ttl); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(120 * time.Millisecond)
-	v, _ := p.Get(ctx, "exp")
+	v, _ := p.Get("exp")
 	if v != nil {
 		t.Fatalf("expected expiry, got %q", v)
 	}
 }
 
 func TestHybrid_WriteThroughReadThrough(t *testing.T) {
-	c, err := New(optsL1Only())
+	c, err := New(context.Background(), optsL1Only())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +98,7 @@ func TestHybrid_WriteThroughReadThrough(t *testing.T) {
 }
 
 func TestHybrid_GetOrSet(t *testing.T) {
-	c, _ := New(optsL1Only())
+	c, _ := New(context.Background(), optsL1Only())
 	defer c.Close()
 
 	calls := 0
@@ -129,7 +128,7 @@ func TestHybrid_GetOrSet(t *testing.T) {
 }
 
 func TestHybrid_Stampede(t *testing.T) {
-	c, _ := New(optsL1Only())
+	c, _ := New(context.Background(), optsL1Only())
 	defer c.Close()
 
 	var mu sync.Mutex
@@ -217,6 +216,7 @@ func TestOptions_ClockDuration(t *testing.T) {
 		t.Fatalf("got %v want 24h", d)
 	}
 }
+
 // optsL2Real returns options pointing at a real external backend (Redis/Valkey)
 // read from the environment. If HELLNET_CACHE_CONNECTION is unset, the test is
 // skipped — this keeps the unit suite hermetic while enabling real integration
@@ -243,7 +243,7 @@ func optsL2Real(t *testing.T) Options {
 
 func TestIntegration_L2SetGet(t *testing.T) {
 	opts := optsL2Real(t)
-	c, err := New(opts)
+	c, err := New(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestIntegration_L2PersistenceAfterL1Eviction(t *testing.T) {
 	opts := optsL2Real(t)
 	// Disable L1 to force reads through L2 only.
 	opts.EnableL1 = false
-	c, err := New(opts)
+	c, err := New(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestIntegration_L2PersistenceAfterL1Eviction(t *testing.T) {
 
 func TestIntegration_L2GetOrSet(t *testing.T) {
 	opts := optsL2Real(t)
-	c, err := New(opts)
+	c, err := New(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestIntegration_L2GetOrSet(t *testing.T) {
 
 func TestIntegration_L2Remove(t *testing.T) {
 	opts := optsL2Real(t)
-	c, err := New(opts)
+	c, err := New(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestNew_DegradesToMemoryOnlyWithoutConnection(t *testing.T) {
 	t.Setenv("HELLNET_CACHE_ENV_FILE", "")
 	t.Setenv("HELLNET_ENVIRONMENT", "Development")
 
-	c, err := New()
+	c, err := New(context.Background())
 	if err != nil {
 		t.Fatalf("New() should not error on missing connection (degrades): %v", err)
 	}
@@ -438,5 +438,74 @@ func TestNew_DegradesToMemoryOnlyWithoutConnection(t *testing.T) {
 		if p.Name() == "L2-External" {
 			t.Fatal("L2 should be disabled when no connection is configured")
 		}
+	}
+}
+
+// The OperationTimeout knob must be bindable from env (integer milliseconds)
+// and default to 5s.
+func TestOptions_OperationTimeoutEnvBinding(t *testing.T) {
+	t.Setenv("HELLNET_CACHE_OPERATION_TIMEOUT_MS", "250")
+
+	if got := DefaultOptions().OperationTimeout; got != 5*time.Second {
+		t.Fatalf("default OperationTimeout = %v, want 5s", got)
+	}
+	o := LoadFromEnv()
+	if o.OperationTimeout != 250*time.Millisecond {
+		t.Fatalf("OperationTimeout not bound: %v, want 250ms", o.OperationTimeout)
+	}
+}
+
+// A zero/negative OperationTimeout (misconfig or empty struct) must normalize
+// to the library default instead of producing instantly-expired contexts.
+func TestOpCtx_NormalizesZeroOperationTimeout(t *testing.T) {
+	o := optsL1Only()
+	o.OperationTimeout = 0 // simulate misconfiguration / unset field
+	c := MustNew(context.Background(), o)
+	defer func() { _ = c.Close() }()
+
+	ctx, cancel := c.opCtx()
+	defer cancel()
+
+	dl, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected operation context to carry a deadline")
+	}
+	remaining := time.Until(dl)
+	if remaining <= 0 || remaining > defaultOperationTimeout {
+		t.Fatalf("op ctx deadline = %v from now, want within %v", remaining, defaultOperationTimeout)
+	}
+}
+
+// End-to-end contract check: the context captured once at New propagates
+// internally — cancelling the caller-side parent must abort an in-flight
+// factory inside GetOrSet.
+func TestNew_ParentCancelAbortsFactory(t *testing.T) {
+	ctx, stop := context.WithCancel(context.Background())
+	c := MustNew(ctx, optsL1Only())
+	defer func() { _ = c.Close() }()
+
+	started := make(chan struct{})
+	factory := func(fctx context.Context) (any, error) {
+		close(started)
+		<-fctx.Done()
+		return nil, fctx.Err()
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		var out string
+		errCh <- c.GetOrSet("cancel-me", &out, factory, 0)
+	}()
+
+	<-started
+	stop()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("GetOrSet err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("factory was not aborted by parent cancellation")
 	}
 }
