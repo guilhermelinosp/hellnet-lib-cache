@@ -7,6 +7,7 @@ require (
 	github.com/guilhermelinosp/hellnet-lib-environments v1.1.7
 	github.com/redis/go-redis/v9 v9.7.3
 	github.com/sony/gobreaker v1.0.0
+	golang.org/x/sync v0.22.0
 )
 
 require (
