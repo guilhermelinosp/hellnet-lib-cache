@@ -210,3 +210,5 @@ Apache 2.0 © 2026 Hellnet
 <!-- verified GPG signing -->
 
 <!-- release signing confirmed -->
+
+<!-- signed release OK -->
