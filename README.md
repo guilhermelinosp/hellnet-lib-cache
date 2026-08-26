@@ -204,3 +204,5 @@ Env vars accept Go duration syntax (`5m`, `30s`) or clock-style (`00:05:00`).
 ## License
 
 Apache 2.0 © 2026 Hellnet
+
+<!-- Release tags are GPG-signed by ci-templates (key fingerprint B58DF1F750BBFE4EC60CC5918367B6CA2DE60761). -->
