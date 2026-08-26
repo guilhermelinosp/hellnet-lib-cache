@@ -204,6 +204,11 @@ func (p *ExternalProvider) Get(key string) ([]byte, error) {
 }
 
 // Set stores raw bytes with optional TTL.
+//
+// Metrics record every attempt regardless of outcome (unchanged semantics).
+// The real backend/circuit-breaker error is returned so the orchestrator can
+// distinguish a total write failure from degraded-but-successful partial
+// writes.
 func (p *ExternalProvider) Set(key string, value []byte, ttl time.Duration) error {
 	ctx, cancel := p.opCtx()
 	defer cancel()
@@ -212,10 +217,11 @@ func (p *ExternalProvider) Set(key string, value []byte, ttl time.Duration) erro
 	_, err := p.breaker.Execute(func() (any, error) {
 		return nil, p.client.Set(ctx, p.opts.formatKey(key), value, actual).Err()
 	})
+	p.metrics.RecordSet()
 	if err != nil {
 		log.Printf("[hellnet-cache] external set failed for %s: %v", key, err)
+		return err
 	}
-	p.metrics.RecordSet()
 	return nil
 }
 

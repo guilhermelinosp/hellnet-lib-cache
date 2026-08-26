@@ -15,6 +15,7 @@ package cache
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/guilhermelinosp/hellnet-lib-environments/environments"
+	"golang.org/x/sync/singleflight"
 )
 
 // defaultOperationTimeout bounds every cache operation when
@@ -225,11 +227,23 @@ func (o Options) formatKey(key string) string {
 	return o.KeyPrefix + key
 }
 
+// capTTL clamps ttl to MaxTTL. A non-positive MaxTTL is treated as "no limit
+// configured": ttl is returned untouched instead of collapsing to zero or
+// negative durations (which would disable expiration downstream).
 func (o Options) capTTL(ttl time.Duration) time.Duration {
-	if ttl > o.MaxTTL {
+	if o.MaxTTL > 0 && ttl > o.MaxTTL {
 		return o.MaxTTL
 	}
 	return ttl
+}
+
+// resolveTTL is the single TTL-resolution point for every duration entering
+// the provider stack (user Set paths as well as background warm/touch writes):
+// a non-positive ttl falls back to Options.DefaultTTL, then the result is
+// clamped to Options.MaxTTL by capTTL. All TTL writes MUST route through this
+// helper so clamping cannot be bypassed.
+func (o Options) resolveTTL(ttl time.Duration) time.Duration {
+	return o.capTTL(defaultTTL(ttl, o.DefaultTTL))
 }
 
 // Metrics tracks hits, misses, sets and removes per layer. Safe for concurrent use.
@@ -321,7 +335,9 @@ func (s *JSONSerializer) Deserialize(data []byte, out any) error {
 // coherently when the captured context is cancelled or Close is called.
 //
 // Concurrency guarantees:
-//   - GetOrSet: stampede-protected via per-key semaphore (auto-cleaned)
+//   - GetOrSet: stampede-protected via singleflight — at most one factory
+//     execution per key at any instant; coalesced waiters receive the leader's
+//     result instead of re-running the factory
 //   - read-through warming: deduplicated (only one warming task per key)
 //   - touch-on-read: optionally extends TTL on hit in upper layers
 //   - all layer writes are parallel (goroutines + WaitGroup)
@@ -333,12 +349,8 @@ type HybridCache struct {
 	providers  []Provider
 	logger     *log.Logger
 
-	locks   sync.Map // key string -> *semaphoreHolder
-	warming sync.Map // key string -> struct{}
-}
-
-type semaphoreHolder struct {
-	sem chan struct{} // capacity 1
+	flight  singleflight.Group // GetOrSet stampede protection, keyed by cache key
+	warming sync.Map           // key string -> struct{}
 }
 
 // Compile-time proof that HybridCache continues to satisfy the Cache
@@ -477,21 +489,47 @@ func (h *HybridCache) Set(key string, value any, ttl time.Duration) error {
 // each provider's internal operation context. It is the low-level primitive
 // behind Set; prefer Set unless you already have the serialized representation.
 // A ttl of 0 uses the layer's default.
+//
+// Failure semantics: if at least one layer persists the value, nil is returned
+// even when other layers fail — degraded-but-successful, since lost copies are
+// re-populated by read-through warming (each failure is logged as a warning).
+// An error is returned only when NO layer managed to persist, so callers can
+// react to a total write failure. Per-provider failures are aggregated with
+// errors.Join and prefixed with the failing layer's name.
 func (h *HybridCache) SetBytes(key string, data []byte, ttl time.Duration) error {
-	actual := h.opts.capTTL(defaultTTL(ttl, h.opts.DefaultTTL))
+	actual := h.opts.resolveTTL(ttl)
 
+	errs := make([]error, len(h.providers)) // index-disjoint writes: race-safe
 	var wg sync.WaitGroup
-	for _, p := range h.providers {
+	for i, p := range h.providers {
 		wg.Add(1)
-		go func(pr Provider) {
+		go func() {
 			defer wg.Done()
-			if err := pr.Set(key, data, actual); err != nil {
-				h.logger.Printf("[hellnet-cache] set failed on %s for key %s: %v", pr.Name(), key, err)
-			}
-		}(p)
+			errs[i] = p.Set(key, data, actual)
+		}()
 	}
 	wg.Wait()
-	return nil
+
+	var failures []error
+	for i, err := range errs {
+		if err == nil {
+			continue
+		}
+		h.logger.Printf("[hellnet-cache] set failed on %s for key %s: %v", h.providers[i].Name(), key, err)
+		failures = append(failures, fmt.Errorf("%s: %w", h.providers[i].Name(), err))
+	}
+	switch len(failures) {
+	case 0:
+		return nil
+	case len(h.providers):
+		// Total failure: every layer refused the write. Callers must know.
+		return errors.Join(failures...)
+	default:
+		// Degraded-but-successful: some layer still holds the value.
+		h.logger.Printf("[hellnet-cache] set degraded for key %s (some layers failed): %v",
+			key, errors.Join(failures...))
+		return nil
+	}
 }
 
 // Remove deletes a key from all layers under each provider's internal
@@ -526,48 +564,73 @@ func (h *HybridCache) Exists(key string) (bool, error) {
 	return false, nil
 }
 
+// Healthy aggregates the health of every wired provider: it returns nil when
+// all providers pass their health check, otherwise a joined error naming each
+// unhealthy layer. The in-memory L1 is trivially healthy while alive; an
+// unreachable L2 surfaces here as an error without breaking reads (reads and
+// writes degrade gracefully instead).
+func (h *HybridCache) Healthy() error {
+	var errs []error
+	for _, p := range h.providers {
+		if !p.HealthCheck() {
+			errs = append(errs, fmt.Errorf("%s: unhealthy", p.Name()))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // GetOrSet retrieves a value or, if missing, runs the factory and caches the
-// result. Stampede-protected per key.
+// result. Stampede-protected per key: concurrent callers for the same key are
+// coalesced into a single factory execution and every waiter receives the
+// leader's result (serialize + write happen once).
 //
 // The factory receives a LIBRARY-DERIVED context (an operation-scoped child of
 // the context captured at New, bounded by Options.OperationTimeout): callers
 // who don't care may ignore it, long computations should honor its
-// cancellation.
+// cancellation. When calls are coalesced, the shared execution runs under the
+// operation context of the caller that won the execution slot.
 func (h *HybridCache) GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl time.Duration) error {
 	ctx, cancel := h.opCtx()
 	defer cancel()
 
-	// fast path
+	// fast path: serve hits without contending on the flight group.
 	if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
 		return h.serializer.Deserialize(data, out)
 	}
 
-	// stampede protection
-	holder := h.semaphoreFor(key)
-	holder.sem <- struct{}{} // acquire
-	defer func() {
-		<-holder.sem // release
-		h.releaseSemaphore(key, holder)
-	}()
+	type flightResult struct{ data []byte }
 
-	// double-check after acquiring lock
-	if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
-		return h.serializer.Deserialize(data, out)
-	}
+	res, err, _ := h.flight.Do(key, func() (any, error) {
+		// double-check after winning the execution slot: another call may
+		// have populated the entry between our fast path and acquiring the key.
+		if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
+			return flightResult{data: data}, nil
+		}
 
-	value, err := factory(ctx)
+		value, ferr := factory(ctx)
+		if ferr != nil {
+			return nil, ferr
+		}
+		// Serialize once; SetBytes persists it and out is populated from the
+		// same bytes below — also for coalesced waiters.
+		data, serr := h.serializer.Serialize(value)
+		if serr != nil {
+			return nil, serr
+		}
+		if serr := h.SetBytes(key, data, ttl); serr != nil {
+			return nil, serr
+		}
+		return flightResult{data: data}, nil
+	})
 	if err != nil {
 		return err
 	}
-	// Serialize once; SetBytes writes it and we populate out from the same bytes.
-	data, err := h.serializer.Serialize(value)
-	if err != nil {
-		return err
+
+	fr, ok := res.(flightResult)
+	if !ok || fr.data == nil {
+		return nil // unreachable with current callback; defensive
 	}
-	if err := h.SetBytes(key, data, ttl); err != nil {
-		return err
-	}
-	return h.serializer.Deserialize(data, out)
+	return h.serializer.Deserialize(fr.data, out)
 }
 
 // Close releases all providers and cancels the context captured at New,
@@ -586,15 +649,6 @@ func (h *HybridCache) Close() error {
 	return firstErr
 }
 
-func (h *HybridCache) semaphoreFor(key string) *semaphoreHolder {
-	v, _ := h.locks.LoadOrStore(key, &semaphoreHolder{sem: make(chan struct{}, 1)})
-	return v.(*semaphoreHolder)
-}
-
-func (h *HybridCache) releaseSemaphore(key string, holder *semaphoreHolder) {
-	h.locks.LoadAndDelete(key)
-}
-
 // warm populates lower layers (deduplicated fire-and-forget). Runs on its own
 // operation context derived from the context captured at New — deliberately
 // decoupled from the request-scoped read that triggered it.
@@ -608,7 +662,9 @@ func (h *HybridCache) warm(key string, data []byte, foundAtIndex int) {
 		ctx, cancel := h.opCtx()
 		defer cancel()
 
-		ttl := h.opts.L1DefaultTTL
+		// Route the raw L1 default through the same resolution path as user
+		// sets: an oversized L1DefaultTTL must still be clamped by MaxTTL.
+		ttl := h.opts.resolveTTL(h.opts.L1DefaultTTL)
 		for i := 0; i < foundAtIndex; i++ {
 			if err := ctx.Err(); err != nil {
 				// Captured context cancelled or op deadline exceeded — stop
@@ -627,7 +683,8 @@ func (h *HybridCache) warm(key string, data []byte, foundAtIndex int) {
 // it as a shutdown guard — the write itself inherits cancellation through the
 // provider's captured base context.
 func (h *HybridCache) touch(key string, data []byte) {
-	ttl := h.opts.TouchTTL
+	// Same resolution path as every other TTL write (default fallback + MaxTTL clamp).
+	ttl := h.opts.resolveTTL(h.opts.TouchTTL)
 	for _, p := range h.providers {
 		go func(pr Provider) {
 			ctx, cancel := h.opCtx()
