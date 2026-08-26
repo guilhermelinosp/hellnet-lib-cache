@@ -208,3 +208,5 @@ Apache 2.0 © 2026 Hellnet
 <!-- Release tags are GPG-signed by ci-templates (key fingerprint B58DF1F750BBFE4EC60CC5918367B6CA2DE60761). -->
 
 <!-- verified GPG signing -->
+
+<!-- release signing confirmed -->
