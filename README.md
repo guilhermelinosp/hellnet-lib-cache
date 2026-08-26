@@ -212,3 +212,5 @@ Apache 2.0 © 2026 Hellnet
 <!-- release signing confirmed -->
 
 <!-- signed release OK -->
+
+<!-- release-sign-test 2026-08-26T12:30 -->
