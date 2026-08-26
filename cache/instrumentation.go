@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -10,6 +11,28 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/sony/gobreaker"
 )
+
+// luaAllowN implements the fixed-window rate-limit primitive atomically:
+// INCRBY the counter, then repair a lost expiry (PTTL < 0) so the window can
+// never persist indefinitely. Returns {count, ttlLeftMilliseconds}.
+const luaAllowN = `
+local count = redis.call('INCRBY', KEYS[1], tonumber(ARGV[1]))
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl < 0 then
+	redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2]))
+	ttl = tonumber(ARGV[2])
+end
+return {count, ttl}
+`
+
+// luaReleaseLock implements token-checked deletion: the key is removed only
+// when its value still equals the releasing holder's token.
+const luaReleaseLock = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+	return redis.call('DEL', KEYS[1])
+end
+return 0
+`
 
 // MemoryProvider is the L1 in-process memory cache provider, backed by ristretto.
 //
@@ -273,6 +296,97 @@ func (p *ExternalProvider) Close() error {
 
 // Metrics returns the provider metrics.
 func (p *ExternalProvider) Metrics() *Metrics { return p.metrics }
+
+// Compile-time proof that the external layer exposes the coordination
+// capabilities consumed by HybridCache's Allow/Lock (and Idempotent storage).
+var _ Scripter = (*ExternalProvider)(nil)
+
+// AllowN increments a fixed-window counter atomically server-side and reports
+// the resulting count plus the time left before the window resets. The key is
+// prefixed with the backend KeyPrefix like every other operation; errors are
+// wrapped with the "cache: " prefix (goes through the circuit breaker like
+// reads/writes do).
+func (p *ExternalProvider) AllowN(key string, increment int64, window time.Duration) (count int64, ttlLeft time.Duration, err error) {
+	if p.client == nil {
+		return 0, 0, fmt.Errorf("cache: allow %q: external backend client unavailable", key)
+	}
+	ctx, cancel := p.opCtx()
+	defer cancel()
+
+	res, err := p.breaker.Execute(func() (any, error) {
+		raw, err := p.client.Eval(ctx, luaAllowN,
+			[]string{p.opts.formatKey(key)},
+			increment, window.Milliseconds(),
+		).Slice()
+		return raw, err
+	})
+	if err != nil {
+		log.Printf("[hellnet-cache] external allow failed for %s: %v", key, err)
+		return 0, 0, fmt.Errorf("cache: allow %q: %w", key, err)
+	}
+
+	vals, ok := res.([]any)
+	if !ok || len(vals) != 2 {
+		return 0, 0, fmt.Errorf("cache: allow %q: unexpected script reply shape", key)
+	}
+	count, countOK := vals[0].(int64)
+	ttlMs, ttlOK := vals[1].(int64)
+	if !countOK || !ttlOK {
+		return 0, 0, fmt.Errorf("cache: allow %q: unexpected script reply types", key)
+	}
+	if ttlMs > 0 {
+		ttlLeft = time.Duration(ttlMs) * time.Millisecond
+	}
+	return count, ttlLeft, nil
+}
+
+// TryLock attempts the compare-free half of the lease protocol: SET key token
+// NX PX ttl — success only when no live lease exists. Auto-expires after ttl.
+func (p *ExternalProvider) TryLock(key, token string, ttl time.Duration) (bool, error) {
+	if p.client == nil {
+		return false, fmt.Errorf("cache: try-lock %q: external backend client unavailable", key)
+	}
+	ctx, cancel := p.opCtx()
+	defer cancel()
+
+	res, err := p.breaker.Execute(func() (any, error) {
+		ok, err := p.client.SetNX(ctx, p.opts.formatKey(key), token, ttl).Result()
+		return ok, err
+	})
+	if err != nil {
+		log.Printf("[hellnet-cache] external try-lock failed for %s: %v", key, err)
+		return false, fmt.Errorf("cache: try-lock %q: %w", key, err)
+	}
+	ok, _ := res.(bool)
+	return ok, nil
+}
+
+// Release deletes the lease only when it still carries the caller's token
+// (compare-and-del). When the lease was absent or re-taken by someone else,
+// ErrLockNotHeld is returned instead of deleting unconditionally.
+func (p *ExternalProvider) Release(key, token string) error {
+	if p.client == nil {
+		return fmt.Errorf("cache: unlock %q: external backend client unavailable", key)
+	}
+	ctx, cancel := p.opCtx()
+	defer cancel()
+
+	res, err := p.breaker.Execute(func() (any, error) {
+		n, err := p.client.Eval(ctx, luaReleaseLock,
+			[]string{p.opts.formatKey(key)},
+			token,
+		).Int64()
+		return n, err
+	})
+	if err != nil {
+		log.Printf("[hellnet-cache] external unlock failed for %s: %v", key, err)
+		return fmt.Errorf("cache: unlock %q: %w", key, err)
+	}
+	if deleted, _ := res.(int64); deleted == 0 {
+		return ErrLockNotHeld
+	}
+	return nil
+}
 
 // clampInt clamps v to the inclusive [lo, hi] range. Compatible with any Go
 // version (avoids the built-in min/max which require Go 1.21+).

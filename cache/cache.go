@@ -3,7 +3,10 @@
 //
 // It features write-through, read-through, stampede protection, env-first
 // configuration and graceful degradation on backend failures. The distributed
-// backend is backend-agnostic in the public API.
+// backend is backend-agnostic in the public API. On top of caching it offers
+// coordination primitives sharing the same stack: Idempotent (at-most-once
+// execution within a TTL), Allow (fixed-window distributed rate limiting) and
+// Lock (TTL-based distributed mutual exclusion).
 //
 // Context model: the application passes a context once at construction
 // (New/MustNew); it is captured internally and propagated to every layer
@@ -338,6 +341,11 @@ func (s *JSONSerializer) Deserialize(data []byte, out any) error {
 //   - GetOrSet: stampede-protected via singleflight — at most one factory
 //     execution per key at any instant; coalesced waiters receive the leader's
 //     result instead of re-running the factory
+//   - Idempotent: same singleflight coalescing per record key; completion
+//     records are never poisoned by failed executions (they stay retriable)
+//   - Allow/Lock: fixed-window counting and compare-and-delete leases,
+//     atomically server-side when an L2 implements Scripter, else bounded
+//     mutex-guarded process-local structures
 //   - read-through warming: deduplicated (only one warming task per key)
 //   - touch-on-read: optionally extends TTL on hit in upper layers
 //   - all layer writes are parallel (goroutines + WaitGroup)
@@ -351,6 +359,13 @@ type HybridCache struct {
 
 	flight  singleflight.Group // GetOrSet stampede protection, keyed by cache key
 	warming sync.Map           // key string -> struct{}
+
+	// Process-local coordination state backing the Idempotent/Lock memory
+	// fallback paths (no Scripter provider wired). Guarded by memMu;
+	// nil maps are created lazily.
+	memMu sync.Mutex
+	memRL map[string]*rateWindow // fixed-window rate counters ("rl:"+key)
+	memLK map[string]*lockEntry  // process-local locks ("lock:"+key)
 }
 
 // Compile-time proof that HybridCache continues to satisfy the Cache

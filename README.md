@@ -196,6 +196,76 @@ Additional runnable examples are available in the package documentation
 
 > 🧒 L1 é a geladeira da cozinha; L2 é a despensa no corredor de fora.
 
+## Idempotency
+
+Run an operation at most once per key within a TTL and share the outcome with
+every retry:
+
+```go
+result, executed, err := c.Idempotent("payment:order-42", 24*time.Hour,
+	func() (any, error) {
+		return chargeCard(order) // runs only when no completion record exists
+	})
+// executed=true  → fn ran now; its success was recorded for the TTL window
+// executed=false → served from the recorded outcome; fn was not invoked
+```
+
+Failures are never recorded — a failed `fn` keeps the key free and the next
+call retries it. Callers inside one process are stampede-protected via
+singleflight; across instances deduplication is best-effort last-write-wins
+(pair with `Lock` when strict cross-instance exclusivity matters).
+
+> 🧒 Mesmo pedido duas vezes? Só uma execução acontece — as repetições recebem o
+> resultado guardado até a validade (TTL) expirar.
+
+## Rate limiting
+
+Fixed-window counter enforced on the shared backend — every instance wired to
+the same cache shares one budget:
+
+```go
+allowed, remaining, resetIn, err := c.Allow("api:user-7", 100, time.Minute)
+if err != nil {
+	return err // invalid limit/window configuration
+}
+if !allowed {
+	// over budget: remaining==0; resetIn says when the window restarts
+}
+```
+
+Without an external backend the same rules hold process-locally; transient
+backend failures degrade to local counting with a warning instead of failing
+hard.
+
+> 🧒 Fila do parque: entram 100 por minuto, o painel mostra quantos ainda podem
+> entrar e em quanto tempo a fila reinicia.
+
+## Distributed locks
+
+TTL-based mutual exclusion, context-free like every operation. Ownership is
+token-checked: releases never delete somebody else's lease and a second release
+errors (`ErrLockNotHeld`):
+
+```go
+unlock, ok, err := c.Lock("job:nightly-sync", 30*time.Second, 5*time.Second)
+if err != nil {
+	return err // backend failure — not contention
+}
+if ok {
+	defer unlock()
+}
+// ok=false → another holder kept it for the whole wait window (nil unlock)
+```
+
+The lease auto-expires after ttl if the holder crashes (no renewal/watchdog in
+v1: keep ttl above worst-case work). It is NOT fencing-safe for
+strongly-consistent resources. Without an external backend, locking degrades to
+process-local correctness only.
+
+> 🧒 Placa de "ocupado" na porta: um de cada vez — e a placa cai sozinha se o
+> dono desmaiar (TTL).
+
+
 ## Layers
 
 | Layer | Provider           | Default TTL | Failure behavior                |
