@@ -39,3 +39,6 @@ vendor/
 go.work
 go.work.sum
 /.cache/
+
+# Examples (demo only — local, not shipped / not committed)
+example/
