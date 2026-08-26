@@ -8,12 +8,13 @@ import (
 	cache "github.com/guilhermelinosp/hellnet-lib-cache/cache"
 )
 
-// memCache builds a hermetic memory-only cache for examples.
+// memCache builds a hermetic memory-only cache for examples. The context is
+// passed once at construction; operations never take one.
 func memCache() *cache.HybridCache {
 	opts := cache.DefaultOptions()
 	opts.EnableL1 = true
 	opts.EnableL2 = false
-	c, _ := cache.New(opts)
+	c, _ := cache.New(context.Background(), opts)
 	return c
 }
 
@@ -36,7 +37,9 @@ func ExampleHybridCache_Set() {
 }
 
 // ExampleHybridCache_GetOrSet demonstrates the stampede-protected factory that
-// computes and caches a value only when it is missing.
+// computes and caches a value only when it is missing. The factory receives a
+// library-derived context (operation-scoped child of the captured context) —
+// callers who don't need cancellation simply ignore it, as here.
 func ExampleHybridCache_GetOrSet() {
 	c := memCache()
 	defer c.Close()
@@ -57,22 +60,27 @@ func ExampleHybridCache_GetOrSet() {
 	// Output: computed=1 value=42
 }
 
-// ExampleHybridCache_GetContext demonstrates the *Context variants with a
-// timeout for cancellation control.
-func ExampleHybridCache_GetContext() {
+// ExampleHybridCache_SetBytes demonstrates the low-level primitive that writes
+// pre-serialized bytes to every layer in parallel (e.g. when the payload was
+// produced by an external serializer). Cancellation/deadlines are handled
+// internally: each operation runs under the library's operation timeout,
+// derived from the context captured at New.
+func ExampleHybridCache_SetBytes() {
 	c := memCache()
 	defer c.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	data, err := cache.NewJSONSerializer().Serialize(map[string]int{"hit": 1})
+	if err != nil {
+		panic(err)
+	}
+	if err := c.SetBytes("stats", data, time.Minute); err != nil {
+		panic(err)
+	}
 
-	if err := c.SetContext(ctx, "k", "v", time.Minute); err != nil {
+	var out map[string]int
+	if err := c.Get("stats", &out); err != nil {
 		panic(err)
 	}
-	var out string
-	if err := c.GetContext(ctx, "k", &out); err != nil {
-		panic(err)
-	}
-	fmt.Println(out)
-	// Output: v
+	fmt.Println(out["hit"])
+	// Output: 1
 }

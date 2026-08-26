@@ -16,6 +16,10 @@ import (
 // TTL behavior:
 //   - default: absolute expiration (key expires exactly TTL after set)
 //   - when L1SlidingExpiration=true: sliding expiration (extends on each read)
+//
+// Operations are synchronous in-process calls: they never block on I/O, so no
+// context plumbing is needed (part of the Provider contract — implementations
+// derive internal contexts themselves).
 type MemoryProvider struct {
 	cache   *ristretto.Cache[string, []byte]
 	opts    Options
@@ -43,7 +47,7 @@ func NewMemoryProvider(opts Options) (*MemoryProvider, error) {
 func (p *MemoryProvider) Name() string { return "L1-Memory" }
 
 // Get retrieves raw bytes by key. Returns nil on miss.
-func (p *MemoryProvider) Get(_ context.Context, key string) ([]byte, error) {
+func (p *MemoryProvider) Get(key string) ([]byte, error) {
 	v, found := p.cache.Get(key)
 	if !found || v == nil {
 		p.metrics.RecordMiss()
@@ -59,7 +63,7 @@ func (p *MemoryProvider) Get(_ context.Context, key string) ([]byte, error) {
 }
 
 // Set stores raw bytes with optional TTL.
-func (p *MemoryProvider) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
+func (p *MemoryProvider) Set(key string, value []byte, ttl time.Duration) error {
 	actual := p.opts.capTTL(defaultTTL(ttl, p.opts.L1DefaultTTL))
 	p.cache.SetWithTTL(key, value, int64(len(value)), actual)
 	// ristretto processes sets asynchronously; Wait ensures the item is visible
@@ -70,20 +74,21 @@ func (p *MemoryProvider) Set(_ context.Context, key string, value []byte, ttl ti
 }
 
 // Remove deletes a key.
-func (p *MemoryProvider) Remove(_ context.Context, key string) error {
+func (p *MemoryProvider) Remove(key string) error {
 	p.cache.Del(key)
 	p.metrics.RecordRemove()
 	return nil
 }
 
 // Exists reports whether a key exists.
-func (p *MemoryProvider) Exists(_ context.Context, key string) (bool, error) {
+func (p *MemoryProvider) Exists(key string) (bool, error) {
 	_, found := p.cache.Get(key)
 	return found, nil
 }
 
-// HealthCheck reports whether the backend is reachable.
-func (p *MemoryProvider) HealthCheck(_ context.Context) bool { return true }
+// HealthCheck reports whether the backend is reachable. The in-process L1 is
+// always healthy while alive.
+func (p *MemoryProvider) HealthCheck() bool { return true }
 
 // Close releases resources held by the provider.
 func (p *MemoryProvider) Close() error {
@@ -97,16 +102,26 @@ func (p *MemoryProvider) Metrics() *Metrics { return p.metrics }
 // ExternalProvider is the L2 distributed cache provider. It speaks the Redis
 // wire protocol (compatible with Redis and Valkey) but the public API stays
 // backend-agnostic — no backend-specific name is exposed.
+//
+// Context model: a base context is captured once at construction (New's
+// context) and every operation derives an internal per-op timeout context
+// from it (Options.OperationTimeout). go-redis requires a context; callers
+// never supply one.
 type ExternalProvider struct {
+	baseCtx context.Context
 	opts    Options
 	metrics *Metrics
 	client  *redis.Client
 	breaker *gobreaker.CircuitBreaker
 }
 
-// NewExternalProvider builds the L2 external provider backed by a Redis-compatible
-// server using the options.
-func NewExternalProvider(opts Options) *ExternalProvider {
+// NewExternalProvider builds the L2 external provider backed by a
+// Redis-compatible server using the options. The given context is captured
+// once and propagated internally to all operations.
+func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	client := redis.NewClient(&redis.Options{
 		Addr:         opts.Connection,
 		Password:     opts.Password,
@@ -138,6 +153,7 @@ func NewExternalProvider(opts Options) *ExternalProvider {
 	}
 
 	return &ExternalProvider{
+		baseCtx: ctx,
 		opts:    opts,
 		metrics: newMetrics("L2-External"),
 		client:  client,
@@ -145,12 +161,26 @@ func NewExternalProvider(opts Options) *ExternalProvider {
 	}
 }
 
+// opCtx derives the per-operation context from the provider's captured base
+// context, bounded by Options.OperationTimeout. Callers must invoke the
+// returned CancelFunc.
+func (p *ExternalProvider) opCtx() (context.Context, context.CancelFunc) {
+	t := p.opts.OperationTimeout
+	if t <= 0 {
+		t = defaultOperationTimeout
+	}
+	return context.WithTimeout(p.baseCtx, t)
+}
+
 // Name returns the layer name.
 func (p *ExternalProvider) Name() string { return "L2-External" }
 
 // Get retrieves raw bytes by key. Returns nil on miss or backend failure
 // (graceful degradation).
-func (p *ExternalProvider) Get(ctx context.Context, key string) ([]byte, error) {
+func (p *ExternalProvider) Get(key string) ([]byte, error) {
+	ctx, cancel := p.opCtx()
+	defer cancel()
+
 	res, err := p.breaker.Execute(func() (any, error) {
 		v, err := p.client.Get(ctx, p.opts.formatKey(key)).Bytes()
 		if errors.Is(err, redis.Nil) {
@@ -174,7 +204,10 @@ func (p *ExternalProvider) Get(ctx context.Context, key string) ([]byte, error) 
 }
 
 // Set stores raw bytes with optional TTL.
-func (p *ExternalProvider) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+func (p *ExternalProvider) Set(key string, value []byte, ttl time.Duration) error {
+	ctx, cancel := p.opCtx()
+	defer cancel()
+
 	actual := p.opts.capTTL(defaultTTL(ttl, p.opts.DefaultTTL))
 	_, err := p.breaker.Execute(func() (any, error) {
 		return nil, p.client.Set(ctx, p.opts.formatKey(key), value, actual).Err()
@@ -187,7 +220,10 @@ func (p *ExternalProvider) Set(ctx context.Context, key string, value []byte, tt
 }
 
 // Remove deletes a key.
-func (p *ExternalProvider) Remove(ctx context.Context, key string) error {
+func (p *ExternalProvider) Remove(key string) error {
+	ctx, cancel := p.opCtx()
+	defer cancel()
+
 	_, err := p.breaker.Execute(func() (any, error) {
 		return p.client.Del(ctx, p.opts.formatKey(key)).Result()
 	})
@@ -199,7 +235,10 @@ func (p *ExternalProvider) Remove(ctx context.Context, key string) error {
 }
 
 // Exists reports whether a key exists.
-func (p *ExternalProvider) Exists(ctx context.Context, key string) (bool, error) {
+func (p *ExternalProvider) Exists(key string) (bool, error) {
+	ctx, cancel := p.opCtx()
+	defer cancel()
+
 	res, err := p.breaker.Execute(func() (any, error) {
 		n, err := p.client.Exists(ctx, p.opts.formatKey(key)).Result()
 		return n > 0, err
@@ -213,8 +252,11 @@ func (p *ExternalProvider) Exists(ctx context.Context, key string) (bool, error)
 	return false, nil
 }
 
-// HealthCheck reports whether the backend is reachable.
-func (p *ExternalProvider) HealthCheck(ctx context.Context) bool {
+// HealthCheck reports whether the backend is reachable, using the internal
+// operation context derived from the captured base context.
+func (p *ExternalProvider) HealthCheck() bool {
+	ctx, cancel := p.opCtx()
+	defer cancel()
 	return p.client.Ping(ctx).Err() == nil
 }
 

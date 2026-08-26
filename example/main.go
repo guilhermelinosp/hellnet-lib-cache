@@ -1,5 +1,9 @@
 // Command example demonstrates usage of the hellnet cache library.
 //
+// The application context is passed ONCE at construction: the library captures
+// it internally and propagates it to every operation and background goroutine.
+// No cache method ever takes a context.
+//
 // Run with env vars set (L2 enabled by default):
 //
 //	export HELLNET_CACHE_CONNECTION=localhost:6379
@@ -15,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/guilhermelinosp/hellnet-lib-cache/cache"
@@ -27,7 +33,12 @@ type Order struct {
 }
 
 func main() {
-	c, err := cache.New()
+	// Root application context: cancelled on Ctrl-C or when main returns,
+	// which in turn tears down all in-flight library work.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	c, err := cache.New(ctx) // <- the ONLY place a context is ever passed
 	if err != nil {
 		log.Fatalf("failed to build cache: %v", err)
 	}
