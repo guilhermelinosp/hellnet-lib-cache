@@ -2,16 +2,7 @@ version: "2"
 
 run:
   timeout: 5m
-  tests: false
-
-formatters:
-  enable:
-    - gofmt
-    - goimports
-  settings:
-    goimports:
-      local-prefixes:
-        - github.com/guilhermelinosp/hellnet-lib-cache
+  tests: true
 
 linters:
   enable:
@@ -36,10 +27,15 @@ linters:
         - name: exported
           severity: warning
   exclusions:
-    rules:
-      - path: "_test\\.go$"
-        linters:
-          - errcheck
+    paths:
+      - "_test\\.go$"
+      - "^_examples/"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
