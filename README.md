@@ -1,6 +1,6 @@
 # hellnet-lib-cache
 
-## 🧒 Understand it like you're 15
+## 🧒 Entenda com 15 anos
 
 *Seção introdutória em português para quem está começando — o restante deste
 README segue em inglês.*
@@ -19,16 +19,17 @@ Cache é a **geladeira da casa**. O banco de dados é o **mercado**:
 
 ### O problema que resolve
 
-Aplicações repetem as mesmas perguntas ao banco milhares de vezes ("tem
-leite?" — mil vezes por segundo). O cache responde **da memória**: em vez de ir
-ao mercado a cada pergunta, consulta primeiro a geladeira (L1) e depois a
-despensa (L2). E se o mercado fechar (banco de dados cair), os dados quentes
-continuam servíveis — a casa não para.
+- Aplicações repetem as mesmas perguntas ao banco milhares de vezes ("tem
+  leite?" — mil vezes por segundo).
+- O cache responde **da memória**: em vez de ir ao mercado a cada pergunta,
+  consulta primeiro a geladeira (L1) e depois a despensa (L2).
+- E se o mercado fechar (banco de dados cair), os dados quentes continuam
+  servíveis — a casa não para.
 
 ### Mini-dicionário
 
-| Termo         | Tradução pra vida real                                                                                     |
-|---------------|------------------------------------------------------------------------------------------------------------|
+| Termo        | Analogia |
+|--------------|----------|
 | **hit**       | "Tinha na geladeira!" — achou no cache, resposta instantânea.                                               |
 | **miss**      | "Acabou — fui ao mercado." Não estava em nenhuma camada; buscou direto na origem.                           |
 | **TTL**       | A validade da embalagem: expirou, joga fora e busca um novo.                                                 |
@@ -37,7 +38,7 @@ continuam servíveis — a casa não para.
 | **stampede**  | Todo mundo correndo pro mercado porque acabou o leite — a lib impede isso por padrão.                        |
 | **Healthy**   | "A geladeira e a despensa estão funcionando?" (`c.Healthy()` agrega a saúde das duas camadas).               |
 
-### Your first lines
+### Primeiras linhas
 
 ```go
 ctx := context.Background()
