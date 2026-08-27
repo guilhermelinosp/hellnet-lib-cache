@@ -1,0 +1,11 @@
+name: auto-pr
+
+on:
+  push:
+    branches:
+      - 'feat/**'
+      - 'fix/**'
+
+jobs:
+  create-pr:
+    uses: guilhermelinosp/ci-templates/.github/workflows/auto-pr.yml@main
