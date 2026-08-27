@@ -8,4 +8,4 @@ on:
 
 jobs:
   create-pr:
-    uses: guilhermelinosp/ci-templates/.github/workflows/auto-pr.yml@main
+    uses: guilhermelinosp/templates/.github/workflows/auto-pr.yml@main

@@ -11,13 +11,13 @@ permissions:
 
 jobs:
   lint:
-    uses: guilhermelinosp/ci-templates/.github/workflows/shellcheck.yml@main
+    uses: guilhermelinosp/templates/.github/workflows/shellcheck.yml@main
 
   merge-check:
-    uses: guilhermelinosp/ci-templates/.github/workflows/merge-check.yml@main
+    uses: guilhermelinosp/templates/.github/workflows/merge-check.yml@main
 
   gitleaks:
-    uses: guilhermelinosp/ci-templates/.github/workflows/gitleaks.yml@main
+    uses: guilhermelinosp/templates/.github/workflows/gitleaks.yml@main
 
   labeler:
-    uses: guilhermelinosp/ci-templates/.github/workflows/labeler.yml@main
+    uses: guilhermelinosp/templates/.github/workflows/labeler.yml@main
