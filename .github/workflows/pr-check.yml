@@ -21,3 +21,9 @@ jobs:
 
   labeler:
     uses: guilhermelinosp/templates/.github/workflows/labeler.yml@main
+
+  quality:
+    name: quality
+    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@main
+    with:
+      go-version-file: go.mod
