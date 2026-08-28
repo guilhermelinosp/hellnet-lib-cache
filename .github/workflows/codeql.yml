@@ -1,33 +1,49 @@
 name: codeql
 
 on:
+  push:
+    branches: [main]
   pull_request:
-    branches: ["main"]
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 * * 1'
 
 permissions:
   actions: read
   contents: read
   security-events: write
 
-# NOTE: Go language scanning is temporarily DISABLED.
-# CodeQL CLI 2.26.3 (bundled with github/codeql-action@v4) does not support
-# Go 1.27 — autobuild/manual extraction fails on the 1.27 stdlib/syntax.
-# Re-enable the `go` matrix entry once CodeQL ships Go 1.27 support, or after
-# the project is downgraded to Go <=1.26.
 jobs:
   analyze:
-    name: analyze (actions)
+    name: analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: actions
+            build-mode: none
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
-          languages: actions
-          build-mode: none
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: +security-and-quality
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
