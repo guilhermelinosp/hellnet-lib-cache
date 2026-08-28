@@ -1,10 +1,15 @@
 name: pipeline
-on: { push: { branches: [main] } }
-permissions: write-all
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
 jobs:
-  release:
-    uses: guilhermelinosp/templates/.github/workflows/release.yml@main
-    secrets: inherit
-  build:
-    needs: [release]
-    uses: guilhermelinosp/templates/.github/workflows/go-build.yml@main
+  quality:
+    name: quality
+    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@main
+    with:
+      go-version-file: go.mod
