@@ -1,10 +1,7 @@
 name: auto-pr
 
 on:
-  push:
-    branches:
-      - 'feat/**'
-      - 'fix/**'
+  workflow_dispatch:
 
 jobs:
   create-pr:
