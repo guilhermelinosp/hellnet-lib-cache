@@ -1,0 +1,98 @@
+name: Security
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+concurrency:
+  group: security-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    name: Security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        if: hashFiles('go.mod') != ''
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go Vet
+        if: hashFiles('go.mod') != ''
+        run: go vet ./...
+
+      - name: Semgrep
+        uses: semgrep/semgrep@v1
+        with:
+          # public community CI ruleset (no SEMGREP_APP_TOKEN required)
+          args: --config p/ci --error
+
+      - name: GoSec
+        if: hashFiles('go.mod') != ''
+        uses: securego/gosec@master
+        with:
+          args: >-
+            -fmt sarif
+            -out gosec.sarif
+            ./...
+
+      - name: Upload GoSec SARIF
+        if: always() && hashFiles('gosec.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: gosec.sarif
+          category: gosec
+
+      - name: Govulncheck
+        if: hashFiles('go.mod') != ''
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy.sarif
+
+      - name: Upload Trivy SARIF
+        if: always() && hashFiles('trivy.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+      - name: Verify modules
+        if: hashFiles('go.mod') != ''
+        run: go mod verify
+
+      - name: Build
+        if: hashFiles('go.mod') != ''
+        run: go build ./...
