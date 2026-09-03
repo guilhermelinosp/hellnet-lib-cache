@@ -156,7 +156,7 @@ func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider {
 	})
 
 	// clamp to uint32 range (safe conversion, avoids gosec G115 on repeated casts).
-	//nolint:gosec // clampInt bounds the value to [0, MaxUint32], so the cast is safe.
+	// #nosec G115 -- clampInt bounds the value to [0, MaxUint32], so the cast is safe.
 	maxRequests := uint32(clampInt(opts.CircuitBreakerFailures, 0, int(^uint32(0))))
 
 	cb := gobreaker.Settings{
