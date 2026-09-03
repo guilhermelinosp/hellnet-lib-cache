@@ -1,0 +1,14 @@
+name: test-quality-only
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: quality
+    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@9fe39322263723d320cdce780f00d5926059798a # main
+    with:
+      go-version-file: go.mod
