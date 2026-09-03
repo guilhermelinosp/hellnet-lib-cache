@@ -1,0 +1,17 @@
+name: auto-pr
+
+on:
+  push:
+    branches:
+      - "feat/**"
+      - "fix/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  create-pr:
+    uses: guilhermelinosp/templates/.github/workflows/auto-pr.yml@main
+
