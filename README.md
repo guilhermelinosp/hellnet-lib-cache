@@ -41,8 +41,7 @@ Cache é a **geladeira da casa**. O banco de dados é o **mercado**:
 ### Primeiras linhas
 
 ```go
-ctx := context.Background()
-c, err := cache.New(ctx) // carrega HELLNET_CACHE_* sozinho
+c, err := cache.New() // carrega HELLNET_CACHE_* sozinho
 
 var menu map[string]string
 err = c.GetOrSet("menu-de-hoje", &menu, func(ctx context.Context) (any, error) {
@@ -52,10 +51,10 @@ err = c.GetOrSet("menu-de-hoje", &menu, func(ctx context.Context) (any, error) {
 
 Linha por linha:
 
-1. `ctx := context.Background()` — o contexto entra **uma única vez**, aqui. A
-   biblioteca guarda e propaga internamente; nenhuma operação recebe contexto.
-2. `cache.New(ctx)` — monta a geladeira (L1) e a despensa (L2) lendo as
-   variáveis `HELLNET_CACHE_*` sozinho. Toda operação roda com timeout interno
+1. `cache.New()` — monta a geladeira (L1) e a despensa (L2), cria seu contexto
+   interno e lê as variáveis de ambiente; nenhuma operação recebe contexto.
+2. A biblioteca lê primeiro `HELLNET_CACHE_*` e usa `HELLNET_*` como fallback.
+   Toda operação roda com timeout interno
    (`Options.OperationTimeout`, padrão `5s`).
 3. `GetOrSet("menu-de-hoje", ...)` — checa geladeira e despensa pela chave.
    Achou (**hit**)? Devolve pronto. Acabou (**miss**)? **UMA** pessoa cozinha (a
@@ -75,7 +74,7 @@ graceful degradation on backend failures.
 go get github.com/guilhermelinosp/hellnet-lib-cache
 ```
 
-Requires Go 1.24+.
+Requires Go 1.27+.
 
 ## Quick start
 
@@ -87,21 +86,15 @@ package main
 import (
 	"context"
 	"log"
-	"os"
-	"os/signal"
 	"time"
 
 	cache "github.com/guilhermelinosp/hellnet-lib-cache/cache"
 )
 
 func main() {
-	// The application context is passed ONCE at construction — the library
-	// captures and propagates it internally. Operations never take a context.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	// New() loads .env (HELLNET_CACHE_*), validates and decides L1/L2.
-	c, err := cache.New(ctx)
+	// New() owns its context, loads .env, and resolves HELLNET_CACHE_* with
+	// HELLNET_* fallback before deciding L1/L2.
+	c, err := cache.New()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -127,18 +120,6 @@ func main() {
 	exists, _ := c.Exists("order:1")
 	_ = exists
 }
-```
-
-### Explicit
-
-```go
-opts := cache.Options{
-	EnableL1:   true,
-	EnableL2:   true,
-	Connection: "localhost:6379",
-	Password:   "your-password", // optional
-}
-c, err := cache.New(ctx, opts)
 ```
 
 ### Minimal env
@@ -172,23 +153,20 @@ func (s *OrderService) Invalidate(id string) error {
 
 ### Context & timeouts
 
-The context given to `New`/`MustNew` is captured once and propagated internally
-to every operation and background goroutine (warming/touch). There are no
-`*Context` method variants. Each operation runs under an internally derived
+`New`/`MustNew` create and own the context propagated internally to every
+operation and background goroutine (warming/touch). There are no `*Context`
+method variants. Each operation runs under an internally derived
 timeout bounded by `OperationTimeout` (default `5s`, env-tunable via
 `HELLNET_CACHE_OPERATION_TIMEOUT_MS`); L2 network calls additionally honor
-`ConnectTimeout`/`ReadTimeout`. Shutdown is coherent: cancelling the caller's
-context or calling `Close()` aborts all in-flight library work.
+`ConnectTimeout`/`ReadTimeout`. Calling `Close()` aborts all in-flight
+library work.
 
 ```go
-ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-defer stop()
-
-c, err := cache.New(ctx)
+c, err := cache.New()
 if err != nil {
     log.Fatal(err)
 }
-defer c.Close() // cancels the internally captured context as well
+defer c.Close() // cancels the library-owned context
 ```
 
 Additional runnable examples are available in the package documentation

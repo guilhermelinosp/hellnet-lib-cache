@@ -69,7 +69,7 @@ func newIsolatedHybrid(t *testing.T, opts Options, providers ...Provider) *Hybri
 	o := opts
 	o.EnableL1 = false
 	o.EnableL2 = false
-	c, err := New(context.Background(), o)
+	c, err := newWithOptions(context.Background(), o)
 	if err != nil {
 		t.Fatalf("new isolated hybrid: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestSetBytes_L1SuccessL2FailureStillSucceeds(t *testing.T) {
 // (previously it recorded metrics and returned nil unconditionally).
 func TestExternalProvider_SetReturnsBackendError(t *testing.T) {
 	addr := closedPort(t)
-	opts := DefaultOptions()
+	opts := testDefaultOptions()
 	opts.EnableL1 = true
 	opts.EnableL2 = true
 	opts.Connection = addr
@@ -215,7 +215,7 @@ func TestGetOrSet_ConcurrentSingleFactory(t *testing.T) {
 
 	for _, variant := range variants {
 		t.Run(variant.name, func(t *testing.T) {
-			c := MustNew(context.Background(), optsL1Only())
+			c := mustNewWithOptions(context.Background(), optsL1Only())
 			defer func() { _ = c.Close() }()
 
 			for iter := 0; iter < iterations; iter++ {
@@ -266,7 +266,7 @@ func TestGetOrSet_ConcurrentSingleFactory(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHealthy_AllHealthyReturnsNil(t *testing.T) {
-	c := MustNew(context.Background(), optsL1Only())
+	c := mustNewWithOptions(context.Background(), optsL1Only())
 	defer func() { _ = c.Close() }()
 
 	if err := c.Healthy(); err != nil {
@@ -276,12 +276,12 @@ func TestHealthy_AllHealthyReturnsNil(t *testing.T) {
 
 func TestHealthy_UnhealthyL2AggregatedAsError(t *testing.T) {
 	addr := closedPort(t)
-	o := DefaultOptions()
+	o := testDefaultOptions()
 	o.EnableL1 = true
 	o.EnableL2 = true
 	o.Connection = addr
 
-	c := MustNew(context.Background(), o)
+	c := mustNewWithOptions(context.Background(), o)
 	defer func() { _ = c.Close() }()
 
 	err := c.Healthy()
@@ -301,7 +301,7 @@ func TestHealthy_UnhealthyL2AggregatedAsError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOptions_ResolveTTL(t *testing.T) {
-	def := DefaultOptions()
+	def := testDefaultOptions()
 	cases := []struct {
 		name string
 		max  time.Duration
@@ -344,7 +344,7 @@ func TestWarm_ClampsToMaxTTL(t *testing.T) {
 	recorder := newStub("warm-target")
 	recorder.setTTLs = make(chan time.Duration, 4)
 
-	o := DefaultOptions()
+	o := testDefaultOptions()
 	o.L1DefaultTTL = 10_000 * time.Hour // absurd: must be clamped by MaxTTL below
 	o.MaxTTL = 2 * time.Minute
 
