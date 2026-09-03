@@ -21,7 +21,7 @@ import (
 // coordination features exercise the genuine serialize/getRaw/SetBytes path.
 func mustHybridL1(t *testing.T) *HybridCache {
 	t.Helper()
-	c := MustNew(context.Background(), optsL1Only())
+	c := mustNewWithOptions(context.Background(), optsL1Only())
 	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
@@ -493,7 +493,7 @@ func TestNewLockToken_IsRandomAndHexEncoded(t *testing.T) {
 // closed port so every scripting op surfaces a real error path.
 func newDeadExternalProvider(t *testing.T) *ExternalProvider {
 	t.Helper()
-	opts := DefaultOptions()
+	opts := testDefaultOptions()
 	opts.Connection = closedPort(t)
 	opts.OperationTimeout = 300 * time.Millisecond
 	opts.RetryCount = 0
@@ -577,9 +577,9 @@ func TestIntegration_LockDistributedAcrossInstances(t *testing.T) {
 	opts := optsL2Real(t)
 	runTag := randomHex(t, 4)
 
-	a := MustNew(context.Background(), opts)
+	a := mustNewWithOptions(context.Background(), opts)
 	defer func() { _ = a.Close() }()
-	b := MustNew(context.Background(), opts)
+	b := mustNewWithOptions(context.Background(), opts)
 	defer func() { _ = b.Close() }()
 
 	key := fmt.Sprintf("it-dlk:%s", runTag)
@@ -618,9 +618,9 @@ func TestIntegration_AllowSharesBudgetAcrossInstances(t *testing.T) {
 	opts := optsL2Real(t)
 	runTag := randomHex(t, 4)
 
-	a := MustNew(context.Background(), opts)
+	a := mustNewWithOptions(context.Background(), opts)
 	defer func() { _ = a.Close() }()
-	b := MustNew(context.Background(), opts)
+	b := mustNewWithOptions(context.Background(), opts)
 	defer func() { _ = b.Close() }()
 
 	key := fmt.Sprintf("it-rl:%s", runTag)
@@ -665,9 +665,9 @@ func TestIntegration_IdempotentDeduplicatesAcrossInstances(t *testing.T) {
 	opts := optsL2Real(t)
 	runTag := randomHex(t, 4)
 
-	producer := MustNew(context.Background(), opts)
+	producer := mustNewWithOptions(context.Background(), opts)
 	defer func() { _ = producer.Close() }()
-	consumer := MustNew(context.Background(), opts)
+	consumer := mustNewWithOptions(context.Background(), opts)
 	defer func() { _ = consumer.Close() }()
 
 	key := fmt.Sprintf("it-idem:%s", runTag)

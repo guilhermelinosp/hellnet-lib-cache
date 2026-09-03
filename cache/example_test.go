@@ -3,18 +3,17 @@ package cache_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	cache "github.com/guilhermelinosp/hellnet-lib-cache/cache"
 )
 
-// memCache builds a hermetic memory-only cache for examples. The context is
-// passed once at construction; operations never take one.
+// memCache builds a memory-only cache through the public zero-config API.
 func memCache() *cache.HybridCache {
-	opts := cache.DefaultOptions()
-	opts.EnableL1 = true
-	opts.EnableL2 = false
-	c, _ := cache.New(context.Background(), opts)
+	_ = os.Setenv("HELLNET_CACHE_ENABLE_L1", "true")
+	_ = os.Setenv("HELLNET_CACHE_ENABLE_L2", "false")
+	c, _ := cache.New()
 	return c
 }
 
@@ -38,7 +37,7 @@ func ExampleHybridCache_Set() {
 
 // ExampleHybridCache_GetOrSet demonstrates the stampede-protected factory that
 // computes and caches a value only when it is missing. The factory receives a
-// library-derived context (operation-scoped child of the captured context) —
+// library-derived context (operation-scoped child of its base context) —
 // callers who don't need cancellation simply ignore it, as here.
 func ExampleHybridCache_GetOrSet() {
 	c := memCache()
@@ -64,7 +63,7 @@ func ExampleHybridCache_GetOrSet() {
 // pre-serialized bytes to every layer in parallel (e.g. when the payload was
 // produced by an external serializer). Cancellation/deadlines are handled
 // internally: each operation runs under the library's operation timeout,
-// derived from the context captured at New.
+// derived from the context owned by the cache.
 func ExampleHybridCache_SetBytes() {
 	c := memCache()
 	defer c.Close()

@@ -8,11 +8,9 @@
 // execution within a TTL), Allow (fixed-window distributed rate limiting) and
 // Lock (TTL-based distributed mutual exclusion).
 //
-// Context model: the application passes a context once at construction
-// (New/MustNew); it is captured internally and propagated to every layer
-// and background goroutine. Individual operations never take a context —
-// each one runs under an internally derived timeout derived from
-// Options.OperationTimeout (bounded by the captured parent context).
+// Context model: the library creates and owns a base context at construction.
+// Individual operations never take a context; each one runs under an internally
+// derived timeout configured through HELLNET_CACHE_OPERATION_TIMEOUT_MS.
 package cache
 
 import (
@@ -66,8 +64,8 @@ type Cache interface {
 	Close() error
 }
 
-// Options configures the cache. All fields are populated from environment
-// variables (HELLNET_CACHE_*) via LoadFromEnv, or set explicitly.
+// Options is the internal cache configuration resolved by New from the
+// environment. It remains visible because provider constructors use it.
 type Options struct {
 	L1Provider                string
 	L1SizeLimitMB             int
@@ -102,77 +100,8 @@ type Options struct {
 	TouchTTL    time.Duration
 }
 
-// DefaultOptions returns the default configuration.
-func DefaultOptions() Options {
-	return Options{
-		L1Provider:                "memory",
-		L1SizeLimitMB:             100,
-		L1DefaultTTL:              5 * time.Minute,
-		L1ExpirationScanFrequency: time.Minute,
-		L1SlidingExpiration:       false,
-		Connection:                "",
-		Password:                  "",
-		Database:                  0,
-		KeyPrefix:                 "hellnet:cache:",
-		ConnectTimeout:            5 * time.Second,
-		ReadTimeout:               time.Second,
-		RetryCount:                2,
-		RetryBaseDelay:            200 * time.Millisecond,
-		CircuitBreakerFailures:    5,
-		CircuitBreakerDuration:    30 * time.Second,
-
-		OperationTimeout: defaultOperationTimeout,
-
-		DefaultSerializer: "json",
-		EnableL1:          true,
-		EnableL2:          true,
-		DefaultTTL:        30 * time.Minute,
-		MaxTTL:            24 * time.Hour,
-		TouchOnRead:       false,
-		TouchTTL:          10 * time.Minute,
-	}
-}
-
-// LoadFromEnv reads configuration from HELLNET_CACHE_* environment variables,
-// starting from DefaultOptions as the fallback for any unset value.
-func LoadFromEnv() Options {
-	o := DefaultOptions()
-	o.L1Provider = environments.GetString("HELLNET_CACHE_", "", "L1_PROVIDER", o.L1Provider)
-	o.L1SizeLimitMB = environments.GetInt("HELLNET_CACHE_", "", "L1_SIZE_LIMIT_MB", o.L1SizeLimitMB)
-	o.L1DefaultTTL = environments.GetDuration("HELLNET_CACHE_", "", "L1_DEFAULT_TTL", o.L1DefaultTTL)
-	o.L1ExpirationScanFrequency = environments.GetDuration("HELLNET_CACHE_", "", "L1_EXPIRATION_SCAN_FREQUENCY", o.L1ExpirationScanFrequency)
-	o.L1SlidingExpiration = environments.GetBool("HELLNET_CACHE_", "", "L1_SLIDING_EXPIRATION", o.L1SlidingExpiration)
-
-	o.Connection = environments.GetString("HELLNET_CACHE_", "", "CONNECTION", o.Connection)
-	o.Password = environments.GetString("HELLNET_CACHE_", "", "PASSWORD", o.Password)
-	o.Database = environments.GetInt("HELLNET_CACHE_", "", "DATABASE", o.Database)
-	o.KeyPrefix = environments.GetString("HELLNET_CACHE_", "", "KEY_PREFIX", o.KeyPrefix)
-	o.ConnectTimeout = environments.GetDuration("HELLNET_CACHE_", "", "CONNECT_TIMEOUT", o.ConnectTimeout)
-	o.ReadTimeout = environments.GetDuration("HELLNET_CACHE_", "", "SYNC_TIMEOUT", o.ReadTimeout)
-	o.RetryCount = environments.GetInt("HELLNET_CACHE_", "", "RETRY_COUNT", o.RetryCount)
-	o.RetryBaseDelay = environments.GetDuration("HELLNET_CACHE_", "", "RETRY_BASE_DELAY_MS", o.RetryBaseDelay)
-	o.CircuitBreakerFailures = environments.GetInt("HELLNET_CACHE_", "", "CB_FAILURES", o.CircuitBreakerFailures)
-	o.CircuitBreakerDuration = environments.GetDuration("HELLNET_CACHE_", "", "CB_DURATION_SEC", o.CircuitBreakerDuration)
-
-	// GetDuration cannot parse bare integers, so the millisecond-suffixed knob
-	// is read through GetInt (matches RETRY_BASE_DELAY_MS convention).
-	o.OperationTimeout = time.Duration(environments.GetInt("HELLNET_CACHE_", "",
-		"OPERATION_TIMEOUT_MS", int(o.OperationTimeout/time.Millisecond))) * time.Millisecond
-
-	o.DefaultSerializer = environments.GetString("HELLNET_CACHE_", "", "DEFAULT_SERIALIZER", o.DefaultSerializer)
-
-	o.EnableL1 = environments.GetBool("HELLNET_CACHE_", "", "ENABLE_L1", o.EnableL1)
-	o.EnableL2 = environments.GetBool("HELLNET_CACHE_", "", "ENABLE_L2", o.EnableL2)
-	o.DefaultTTL = environments.GetDuration("HELLNET_CACHE_", "", "DEFAULT_TTL", o.DefaultTTL)
-	o.MaxTTL = environments.GetDuration("HELLNET_CACHE_", "", "MAX_TTL", o.MaxTTL)
-	o.TouchOnRead = environments.GetBool("HELLNET_CACHE_", "", "TOUCH_ON_READ", o.TouchOnRead)
-	o.TouchTTL = environments.GetDuration("HELLNET_CACHE_", "", "TOUCH_TTL", o.TouchTTL)
-
-	return o
-}
-
-// Validate checks that required fields are set when their feature is enabled.
-func (o Options) Validate() error {
+// validate checks that required fields are set when their feature is enabled.
+func (o Options) validate() error {
 	var missing []string
 	if o.EnableL2 {
 		if o.Connection == "" {
@@ -185,44 +114,6 @@ func (o Options) Validate() error {
 	return fmt.Errorf("hellnet-cache: required environment variables are missing: %v\n"+
 		"set them before startup, e.g.:\n"+
 		"  export HELLNET_CACHE_CONNECTION=localhost:6379", missing)
-}
-
-// Loading loads the .env file (dev or HELLNET_ENVIRONMENT undefined) and
-// validates the required HELLNET_CACHE_* envs (fail-fast). In explicit
-// Production/Staging it is a no-op — configuration is expected from the real
-// environment. Mirrors the loading pattern of hellnet-lib-telemetry.
-func Loading() {
-	if !isDev() {
-		return
-	}
-	loadEnvFiles()
-	if err := LoadFromEnv().Validate(); err != nil {
-		log.Fatalf("%v", err)
-	}
-}
-
-// loadEnvFiles loads the .env file from disk (HELLNET_CACHE_ENV_FILE, then
-// ./.env in the working directory, then ./.env alongside the executable). Used
-// by Loading() (with validation) and New() (without fail-fast, so it can degrade
-// to memory-only). Delegates to hellnet-lib-environments, which is a no-op
-// outside Development/Staging/Production default.
-func loadEnvFiles() {
-	_ = environments.LoadDotEnv("HELLNET_CACHE_ENV_FILE", "HELLNET_ENV_FILE")
-}
-
-// isDev reports whether HELLNET_ENVIRONMENT is Development or unset.
-func isDev() bool {
-	env := deploymentEnv()
-	return env == "" || (env != "Production" && env != "Staging")
-}
-
-// deploymentEnv returns HELLNET_ENVIRONMENT, defaulting to "Development"
-// when unset (retained for test compatibility and fail-fast messaging).
-func deploymentEnv() string {
-	if v := environments.DeploymentEnv(); v != "" {
-		return v
-	}
-	return "Development"
 }
 
 // formatKey applies the external backend key prefix.
@@ -331,11 +222,11 @@ func (s *JSONSerializer) Deserialize(data []byte, out any) error {
 // HybridCache orchestrates the multi-layer cache with read-through and
 // write-through semantics: L1 (memory) -> L2 (external).
 //
-// Context model: the context passed to New is captured once (baseCtx) and
-// propagated internally — public methods never accept a context. Each logical
+// Context model: the library-owned baseCtx is propagated internally — public
+// methods never accept a context. Each logical
 // operation derives a per-operation timeout context from baseCtx via opCtx();
 // background goroutines (warming/touch) do the same so everything halts
-// coherently when the captured context is cancelled or Close is called.
+// coherently when Close is called.
 //
 // Concurrency guarantees:
 //   - GetOrSet: stampede-protected via singleflight — at most one factory
@@ -372,40 +263,55 @@ type HybridCache struct {
 // abstraction after API surface changes.
 var _ Cache = (*HybridCache)(nil)
 
-// New builds a HybridCache, wiring up the enabled providers.
-//
-// The context is REQUIRED and captured once here; it is propagated internally
-// to every operation and background goroutine — operations themselves never
-// take a context and run under Options.OperationTimeout derived from it.
-// Cancelling ctx (or calling Close) tears down all in-flight work.
-//
-// Without options it is env-first: loads HELLNET_CACHE_* via LoadFromEnv().
+// New follows the hellnet-lib-telemetry constructor pattern: it creates the
+// base context, loads .env, and resolves configuration from HELLNET_CACHE_*
+// with HELLNET_* as fallback.
 // If L2 is enabled but no HELLNET_CACHE_CONNECTION is present, the library
 // automatically falls back to memory-only (L2 disabled) instead of erroring.
-func New(ctx context.Context, opts ...Options) (*HybridCache, error) {
-	// Load env (embedded .env + ./.env from disk) so callers only need New().
-	loadEnvFiles()
+func New() (*HybridCache, error) {
+	ctx := context.Background()
 
-	o := LoadFromEnv()
-	if len(opts) > 0 {
-		o = opts[0]
+	_ = environments.LoadDotEnv()
+
+	o := Options{
+		L1Provider:                environments.GetString("HELLNET_CACHE_", "HELLNET_", "L1_PROVIDER", "memory"),
+		L1SizeLimitMB:             environments.GetInt("HELLNET_CACHE_", "HELLNET_", "L1_SIZE_LIMIT_MB", 100),
+		L1DefaultTTL:              environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "L1_DEFAULT_TTL", 5*time.Minute),
+		L1ExpirationScanFrequency: environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "L1_EXPIRATION_SCAN_FREQUENCY", time.Minute),
+		L1SlidingExpiration:       environments.GetBool("HELLNET_CACHE_", "HELLNET_", "L1_SLIDING_EXPIRATION", false),
+		Connection:                environments.GetString("HELLNET_CACHE_", "HELLNET_", "CONNECTION", ""),
+		Password:                  environments.GetString("HELLNET_CACHE_", "HELLNET_", "PASSWORD", ""),
+		Database:                  environments.GetInt("HELLNET_CACHE_", "HELLNET_", "DATABASE", 0),
+		KeyPrefix:                 environments.GetString("HELLNET_CACHE_", "HELLNET_", "KEY_PREFIX", "hellnet:cache:"),
+		ConnectTimeout:            environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "CONNECT_TIMEOUT", 5*time.Second),
+		ReadTimeout:               environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "SYNC_TIMEOUT", time.Second),
+		RetryCount:                environments.GetInt("HELLNET_CACHE_", "HELLNET_", "RETRY_COUNT", 2),
+		RetryBaseDelay:            environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "RETRY_BASE_DELAY_MS", 200*time.Millisecond),
+		CircuitBreakerFailures:    environments.GetInt("HELLNET_CACHE_", "HELLNET_", "CB_FAILURES", 5),
+		CircuitBreakerDuration:    environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "CB_DURATION_SEC", 30*time.Second),
+		OperationTimeout:          time.Duration(environments.GetInt("HELLNET_CACHE_", "HELLNET_", "OPERATION_TIMEOUT_MS", 5000)) * time.Millisecond,
+		DefaultSerializer:         environments.GetString("HELLNET_CACHE_", "HELLNET_", "DEFAULT_SERIALIZER", "json"),
+		EnableL1:                  environments.GetBool("HELLNET_CACHE_", "HELLNET_", "ENABLE_L1", true),
+		EnableL2:                  environments.GetBool("HELLNET_CACHE_", "HELLNET_", "ENABLE_L2", true),
+		DefaultTTL:                environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "DEFAULT_TTL", 30*time.Minute),
+		MaxTTL:                    environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "MAX_TTL", 24*time.Hour),
+		TouchOnRead:               environments.GetBool("HELLNET_CACHE_", "HELLNET_", "TOUCH_ON_READ", false),
+		TouchTTL:                  environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "TOUCH_TTL", 10*time.Minute),
 	}
+	return newWithOptions(ctx, o)
+}
 
+// newWithOptions is the explicit construction seam used by package tests.
+func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
 	if o.EnableL2 && o.Connection == "" {
 		log.Printf("[hellnet-cache] HELLNET_CACHE_CONNECTION not set — falling back to memory-only (L2 disabled)")
 		o.EnableL2 = false
 	}
 
-	if err := o.Validate(); err != nil {
+	if err := o.validate(); err != nil {
 		return nil, err
 	}
 
-	// Defensive: documented as required, but degrade instead of panicking on a
-	// programming slip during startup.
-	if ctx == nil {
-		log.Printf("[hellnet-cache] nil context passed to New — using Background")
-		ctx = context.Background()
-	}
 	// Derive our own child so Close() can tear down library-owned work without
 	// touching the caller's context lifecycle (and vice versa).
 	baseCtx, cancel := context.WithCancel(ctx)
@@ -435,10 +341,17 @@ func New(ctx context.Context, opts ...Options) (*HybridCache, error) {
 	}, nil
 }
 
-// MustNew is like New but panics on error. Use at startup. The context is
-// captured once and propagated internally; see New.
-func MustNew(ctx context.Context, opts ...Options) *HybridCache {
-	c, err := New(ctx, opts...)
+// MustNew is like New but panics on error. Use at startup.
+func MustNew() *HybridCache {
+	c, err := New()
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+func mustNewWithOptions(ctx context.Context, o Options) *HybridCache {
+	c, err := newWithOptions(ctx, o)
 	if err != nil {
 		panic(err)
 	}
