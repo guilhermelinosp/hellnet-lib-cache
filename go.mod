@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/dgraph-io/ristretto/v2 v2.2.0
-	github.com/guilhermelinosp/hellnet-lib-environments v1.1.7
+	github.com/guilhermelinosp/hellnet-lib-environments v1.1.15
 	github.com/redis/go-redis/v9 v9.7.3
 	github.com/sony/gobreaker v1.0.0
 	golang.org/x/sync v0.22.0
