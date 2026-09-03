@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/bits"
 	"time"
 
 	"github.com/dgraph-io/ristretto/v2"
@@ -156,8 +155,9 @@ func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider {
 		MaxRetries:   opts.RetryCount,
 	})
 
-	// clamp to uint32 range using math/bits (gosec G115 safe).
-	maxRequests := safeUint32(clampInt(opts.CircuitBreakerFailures, 0, int(^uint32(0))))
+	// clamp to uint32 range (safe conversion, avoids gosec G115 on repeated casts).
+	//nolint:gosec // clampInt bounds the value to [0, MaxUint32], so the cast is safe.
+	maxRequests := uint32(clampInt(opts.CircuitBreakerFailures, 0, int(^uint32(0))))
 
 	cb := gobreaker.Settings{
 		Name:        "L2-External",
@@ -398,13 +398,4 @@ func clampInt(v, lo, hi int) int {
 		return hi
 	}
 	return v
-}
-
-// safeUint32 converts a non-negative int to uint32 without triggering gosec G115.
-// The caller MUST ensure v >= 0; this function uses math/bits to prove the
-// range is safe to the static analyser.
-func safeUint32(v int) uint32 {
-	u := uint64(v)
-	_ = bits.Len64(u) // documentation: v fits in uint32 if caller respected the contract
-	return uint32(u)   //nolint:gosec // safe by construction
 }
