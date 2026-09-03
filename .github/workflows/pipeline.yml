@@ -17,15 +17,154 @@ permissions:
 jobs:
   release:
     name: release
-    uses: guilhermelinosp/templates/.github/workflows/release.yml@9fe39322263723d320cdce780f00d5926059798a # main
-    secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    runs-on: ubuntu-latest
     permissions:
       contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Bump version and check tags
+        id: semver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD=$(git rev-parse HEAD)
+          EXISTING_TAG=$(git tag --points-at "$HEAD" 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$' | head -1 || echo "")
+          if [ -n "$EXISTING_TAG" ]; then
+            echo "tag=$EXISTING_TAG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LAST_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$' | head -1 || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "tag=v1.0.0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Check if last tag was beta
+          if [[ "$LAST_TAG" =~ -beta\.([0-9]+)$ ]]; then
+            BETA_NUM=${BASH_REMATCH[1]}
+            BASE="${LAST_TAG%-beta*}"
+            echo "tag=${BASE}-beta.$((BETA_NUM + 1))" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          IFS='.' read -r M m p <<< "${LAST_TAG#v}"
+          M=${M:-1}; m=${m:-0}; p=${p:-0}
+          git log --format="%s" "$LAST_TAG..HEAD" 2>/dev/null | grep -q "BREAKING CHANGE\|!:" && { M=$((M+1)); m=0; p=0; } \
+            || git log --format="%s" "$LAST_TAG..HEAD" 2>/dev/null | grep -q "^feat" && { m=$((m+1)); p=0; } \
+            || p=$((p+1))
+          echo "tag=v${M}.${m}.${p}" >> "$GITHUB_OUTPUT"
+      - name: Import GPG key for tag signing
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "GPG_PRIVATE_KEY not set — skipping signing setup"
+            exit 0
+          fi
+          mkdir -p ~/.gnupg && chmod 700 ~/.gnupg
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent 2>/dev/null || true
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --import
+          KEY_ID=$(gpg --list-secret-keys --with-colons --keyid-format long 2>/dev/null | awk -F: '/^sec:/{print $5; exit}')
+          UID_LINE=$(gpg --list-secret-keys --with-colons 2>/dev/null | awk -F: '/^uid:/{print $10; exit}')
+          NAME=$(echo "$UID_LINE" | sed 's/<.*//;s/[[:space:]]*$//')
+          EMAIL=$(echo "$UID_LINE" | sed -n 's/.*<\(.*\)>.*/\1/p')
+          git config user.signingkey "$KEY_ID"
+          git config user.name "$NAME"
+          git config user.email "$EMAIL"
+          git config tag.gpgsign true
+          WRAPPER="$RUNNER_TEMP/gpg-wrapper.sh"
+          printf '#!/bin/sh\nexec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"\n' > "$WRAPPER"
+          chmod +x "$WRAPPER"
+          git config gpg.program "$WRAPPER"
+      - name: Create tag
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          TAG="${{ steps.semver.outputs.tag }}"
+          if [ -z "$TAG" ] || [ "$TAG" = "v" ]; then
+            echo "Invalid tag ($TAG) — skipping"
+            exit 0
+          fi
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — skipping"
+            exit 0
+          fi
+          if [ -n "${GPG_PRIVATE_KEY:-}" ]; then
+            git tag -s "$TAG" -m "Release $TAG"
+          else
+            git tag "$TAG"
+          fi
+          git push origin "$TAG"
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.semver.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ steps.semver.outputs.tag }}" \
+            --generate-notes --latest
 
   quality:
     name: quality
-    needs: [release]
-    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@9fe39322263723d320cdce780f00d5926059798a # main
-    with:
-      go-version-file: go.mod
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify module integrity
+        # porcelain (not git diff) because stdlib-only modules legitimately
+        # have no go.sum; git diff would abort on the missing pathspec.
+        run: |
+          go mod verify
+          go mod tidy
+          if git status --porcelain -- go.mod go.sum | grep -q .; then
+            echo "::error::go.mod/go.sum out of sync —" \
+              "run 'go mod tidy' and commit"
+            git diff -- go.mod go.sum || true
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Extra repository-specific checks
+        if: ${{ env.EXTRA_COMMANDS != '' }}
+        run: ${{ env.EXTRA_COMMANDS }}
+
+      - name: Test with coverage (race)
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Upload coverage artifact
+        if: ${{ env.coverage_artifact == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Use canonical golangci config
+        run: >-
+          cp .golangci.yml .golangci.ci.yml 2>/dev/null || echo "{}" >
+          .golangci.ci.yml
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --config .golangci.ci.yml
+
+      - name: Build
+        run: go build ./...
+
+      - name: Govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
