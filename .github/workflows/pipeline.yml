@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: ${{ env.coverage_artifact == true }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out
