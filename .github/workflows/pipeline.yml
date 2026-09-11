@@ -188,4 +188,6 @@ jobs:
         run: go build ./...
 
       - name: Govulncheck
+        env:
+          GOTOOLCHAIN: local
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
