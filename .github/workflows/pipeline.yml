@@ -15,8 +15,29 @@ permissions:
   contents: write
 
 jobs:
+  guard-semver:
+    name: guard-semver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Block auto-major (Go module path has no /v2 suffix)
+        run: |
+          LAST_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "No tags yet, skipping"
+            exit 0
+          fi
+          if git log --format="%s" "$LAST_TAG..HEAD" 2>/dev/null | grep -qE "BREAKING CHANGE|!:"; then
+            echo "::error::Major bump detected but module path has no /v2 suffix (Go requires /v2 for major>=2). Remove BREAKING CHANGE/!: markers or migrate the module to /v2 manually."
+            exit 1
+          fi
+          echo "No breaking markers: auto-bump stays below v2. OK"
+
   release:
     name: release
+    needs: [guard-semver]
     runs-on: ubuntu-latest
     permissions:
       contents: write
