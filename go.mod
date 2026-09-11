@@ -1,6 +1,6 @@
 module github.com/guilhermelinosp/hellnet-lib-cache
 
-go 1.27.0
+go 1.26.0
 
 require (
 	github.com/dgraph-io/ristretto/v2 v2.2.0
