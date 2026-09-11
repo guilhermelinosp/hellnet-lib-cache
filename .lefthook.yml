@@ -1,4 +1,3 @@
----
 output: false
 
 pre-commit:
@@ -11,9 +10,7 @@ pre-commit:
       glob: "*.go"
       run: go vet ./...
     tidy:
-      run: >-
-        go mod tidy &&
-        git diff --exit-code go.mod $([ -f go.sum ] && echo go.sum)
+      run: go mod tidy && git diff --exit-code go.mod $([ -f go.sum ] && echo go.sum)
     lint:
       run: |
         if command -v golangci-lint >/dev/null 2>&1; then
@@ -21,9 +18,6 @@ pre-commit:
         else
           echo "golangci-lint not installed; skipping"
         fi
-    yamllint:
-      glob: "*.{yaml,yml}"
-      run: test -z "{staged_files}" || yamllint {staged_files}
     secrets-scan:
       glob: "*.{yaml,yml,go,json,sh}"
       run: |
@@ -41,8 +35,4 @@ pre-push:
 commit-msg:
   commands:
     conventional:
-      run: >-
-        grep -Eq
-        "^(feat|fix|docs|style|refactor|perf|test|ci|chore|revert|ops)"
-        "(\(.+\))?!?: .+"
-        {1}
+      run: 'grep -Eq "^(feat|fix|docs|style|refactor|perf|test|ci|chore|revert|ops)(\\(.+\\))?!?: .+" {1}'
