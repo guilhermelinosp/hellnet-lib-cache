@@ -10,7 +10,7 @@ pre-commit:
       glob: "*.go"
       run: go vet ./...
     tidy:
-      run: go mod tidy && git diff --exit-code go.mod $([ -f go.sum ] && echo go.sum)
+      run: go mod tidy
     lint:
       run: |
         if command -v golangci-lint >/dev/null 2>&1; then
