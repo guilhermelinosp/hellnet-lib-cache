@@ -20,7 +20,7 @@ jobs:
     uses: guilhermelinosp/templates/.github/workflows/gitleaks.yml@e7d093b460c1e25f16121d509eefcbb597612c95 # main
 
   labeler:
-    uses: guilhermelinosp/templates/.github/workflows/labeler.yml@e7d093b460c1e25f16121d509eefcbb597612c95 # main
+    uses: guilhermelinosp/templates/.github/workflows/labeler.yml@da82921830fafa7349cda3faef3310a3a4d86dda # main
 
   quality:
     name: quality
