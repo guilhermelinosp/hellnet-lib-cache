@@ -37,7 +37,7 @@ jobs:
     needs: [guard-semver]
     permissions:
       contents: write
-    uses: guilhermelinosp/templates/.github/workflows/release.yml@fde7d4a5a2e7aa5dd42e8812df4783daa39b1543 # main
+    uses: guilhermelinosp/templates/.github/workflows/release.yml@9aa28e4932048b724e165f169963643e8c4bcd69 # main
 
   quality:
     name: quality
@@ -45,6 +45,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@e7d093b460c1e25f16121d509eefcbb597612c95 # main
+    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@9aa28e4932048b724e165f169963643e8c4bcd69 # main
     with:
       go-version-file: go.mod
