@@ -11,6 +11,8 @@ on:
       - '.github/**'
   workflow_dispatch:
 
+permissions:
+  contents: write
 jobs:
   guard-semver:
     name: guard-semver
@@ -32,6 +34,7 @@ jobs:
           fi
           echo "No breaking markers: auto-bump stays below v2. OK"
 
+  release:
     uses: guilhermelinosp/templates/.github/workflows/release.yml@745ef1ca8288cd320b0b4dcf1485e34003945c79
     with:
       app-client-id: ${{ vars.HELLNET_ACTIONS_CLIENT_ID }}
