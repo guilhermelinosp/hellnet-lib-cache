@@ -1,12 +1,10 @@
 name: codeql
 
 on:
+on:
   schedule:
     - cron: '17 4 * * *'
-  workflow_dispatch:    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
-
 permissions:
   actions: read
   contents: read
