@@ -1,5 +1,9 @@
 name: pr-check
 
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -30,3 +34,21 @@ jobs:
     uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@745ef1ca8288cd320b0b4dcf1485e34003945c79
     with:
       go-version-file: go.mod
+
+  pr-gate:
+    if: always()
+    needs: [lint, merge-check, gitleaks, labeler, quality]
+    runs-on: ubuntu-latest
+    steps:
+      - name: gate
+        shell: python
+        env:
+          NEEDS: ${{ toJson(needs) }}
+        run: |
+          import json, os, sys
+          needs = json.loads(os.environ['NEEDS'])
+          failed = [k for k, v in needs.items() if v.get('result') not in ('success', 'skipped')]
+          if failed:
+              print('BLOCKED-BY:', failed)
+              sys.exit(1)
+          print('ALL-GREEN')
