@@ -32,18 +32,10 @@ jobs:
           fi
           echo "No breaking markers: auto-bump stays below v2. OK"
 
-  release:
-    name: release
-    needs: [guard-semver]
-    permissions:
-      contents: write
     uses: guilhermelinosp/templates/.github/workflows/release.yml@745ef1ca8288cd320b0b4dcf1485e34003945c79
     with:
       app-client-id: ${{ vars.HELLNET_ACTIONS_CLIENT_ID }}
     secrets: inherit
-    with:
-      app-client-id: ${{ vars.HELLNET_ACTIONS_CLIENT_ID }}
-
   quality:
     name: quality
     needs: [release]
