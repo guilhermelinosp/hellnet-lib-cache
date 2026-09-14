@@ -1,7 +1,6 @@
 name: security
 
 on:
-on:
   schedule:
     - cron: '17 4 * * *'
   workflow_dispatch:
