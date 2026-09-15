@@ -35,7 +35,7 @@ jobs:
           echo "No breaking markers: auto-bump stays below v2. OK"
 
   release:
-    uses: guilhermelinosp/templates/.github/workflows/release.yml@745ef1ca8288cd320b0b4dcf1485e34003945c79
+    uses: guilhermelinosp/templates/.github/workflows/release.yml@8f299961846cf1d0cbf7129a99ea6c3095ec3abd
     with:
       app-client-id: ${{ vars.HELLNET_ACTIONS_CLIENT_ID }}
     secrets: inherit
