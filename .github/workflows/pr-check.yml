@@ -24,7 +24,7 @@ jobs:
     uses: guilhermelinosp/templates/.github/workflows/gitleaks.yml@8f299961846cf1d0cbf7129a99ea6c3095ec3abd
 
   labeler:
-    uses: guilhermelinosp/templates/.github/workflows/labeler.yml@8f299961846cf1d0cbf7129a99ea6c3095ec3abd
+    uses: guilhermelinosp/templates/.github/workflows/labeler.yml@6e01bff91eeb1d62b1d55ccb7c00c19a73248184
     with:
       app-client-id: ${{ vars.HELLNET_ACTIONS_CLIENT_ID }}
     secrets: inherit
