@@ -3,9 +3,12 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     open-pull-requests-limit: 10
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     labels:
       - "dependencies"
       - "github-actions"
-
