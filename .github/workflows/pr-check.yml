@@ -15,23 +15,23 @@ permissions:
 
 jobs:
   lint:
-    uses: guilhermelinosp/templates/.github/workflows/shellcheck.yml@8f299961846cf1d0cbf7129a99ea6c3095ec3abd
+    uses: guilhermelinosp/templates/.github/workflows/shellcheck.yml@df9f66533749a4a3a4b59c18a828a179800de096
 
   merge-check:
-    uses: guilhermelinosp/templates/.github/workflows/merge-check.yml@8f299961846cf1d0cbf7129a99ea6c3095ec3abd
+    uses: guilhermelinosp/templates/.github/workflows/merge-check.yml@df9f66533749a4a3a4b59c18a828a179800de096
 
   gitleaks:
-    uses: guilhermelinosp/templates/.github/workflows/gitleaks.yml@8f299961846cf1d0cbf7129a99ea6c3095ec3abd
+    uses: guilhermelinosp/templates/.github/workflows/gitleaks.yml@df9f66533749a4a3a4b59c18a828a179800de096
 
   labeler:
-    uses: guilhermelinosp/templates/.github/workflows/labeler.yml@6e01bff91eeb1d62b1d55ccb7c00c19a73248184
+    uses: guilhermelinosp/templates/.github/workflows/labeler.yml@df9f66533749a4a3a4b59c18a828a179800de096
     with:
       app-client-id: ${{ vars.HELLNET_ACTIONS_CLIENT_ID }}
     secrets: inherit
 
   quality:
     name: quality
-    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@8f299961846cf1d0cbf7129a99ea6c3095ec3abd
+    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@df9f66533749a4a3a4b59c18a828a179800de096
     with:
       go-version-file: go.mod
 
