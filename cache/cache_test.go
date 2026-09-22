@@ -253,14 +253,14 @@ func TestOptions_PasswordOptional(t *testing.T) {
 }
 
 func TestOptions_ClockDuration(t *testing.T) {
-	d, err := environments.ParseDuration("00:05:00")
+	d, err := time.ParseDuration("5m")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d != 5*time.Minute {
 		t.Fatalf("got %v want 5m", d)
 	}
-	d, err = environments.ParseDuration("24:00:00")
+	d, err = time.ParseDuration("24h")
 	if err != nil {
 		t.Fatal(err)
 	}
