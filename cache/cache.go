@@ -263,6 +263,42 @@ type HybridCache struct {
 // abstraction after API surface changes.
 var _ Cache = (*HybridCache)(nil)
 
+// cacheEnv resolves a cache option from HELLNET_CACHE_<name> first, falling
+// back to HELLNET_<name> (generic), then def. Returns the env VALUE.
+func cacheEnv(name, def string) string {
+	if v := environments.Get("HELLNET_CACHE_" + name, ""); v != "" {
+		return v
+	}
+	return environments.Get("HELLNET_"+name, def)
+}
+
+// cacheInt reads an int option from HELLNET_CACHE_<name> with HELLNET_<name>
+// fallback.
+func cacheInt(name, def string) int {
+	if v := environments.Get("HELLNET_CACHE_" + name, ""); v != "" {
+		return environments.GetInt("HELLNET_CACHE_"+name, def)
+	}
+	return environments.GetInt("HELLNET_"+name, def)
+}
+
+// cacheDuration reads a duration option from HELLNET_CACHE_<name> with
+// HELLNET_<name> fallback.
+func cacheDuration(name, def string) time.Duration {
+	if v := environments.Get("HELLNET_CACHE_" + name, ""); v != "" {
+		return environments.GetDuration("HELLNET_CACHE_"+name, def)
+	}
+	return environments.GetDuration("HELLNET_"+name, def)
+}
+
+// cacheBool reads a bool option from HELLNET_CACHE_<name> with HELLNET_<name>
+// fallback.
+func cacheBool(name, def string) bool {
+	if v := environments.Get("HELLNET_CACHE_" + name, ""); v != "" {
+		return environments.GetBool("HELLNET_CACHE_"+name, def)
+	}
+	return environments.GetBool("HELLNET_"+name, def)
+}
+
 // New follows the hellnet-lib-telemetry constructor pattern: it creates the
 // base context, loads .env, and resolves configuration from HELLNET_CACHE_*
 // with HELLNET_* as fallback.
@@ -274,29 +310,29 @@ func New() (*HybridCache, error) {
 	_ = environments.LoadDotEnv()
 
 	o := Options{
-		L1Provider:                environments.GetString("HELLNET_CACHE_", "HELLNET_", "L1_PROVIDER", "memory"),
-		L1SizeLimitMB:             environments.GetInt("HELLNET_CACHE_", "HELLNET_", "L1_SIZE_LIMIT_MB", 100),
-		L1DefaultTTL:              environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "L1_DEFAULT_TTL", 5*time.Minute),
-		L1ExpirationScanFrequency: environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "L1_EXPIRATION_SCAN_FREQUENCY", time.Minute),
-		L1SlidingExpiration:       environments.GetBool("HELLNET_CACHE_", "HELLNET_", "L1_SLIDING_EXPIRATION", false),
-		Connection:                environments.GetString("HELLNET_CACHE_", "HELLNET_", "CONNECTION", ""),
-		Password:                  environments.GetString("HELLNET_CACHE_", "HELLNET_", "PASSWORD", ""),
-		Database:                  environments.GetInt("HELLNET_CACHE_", "HELLNET_", "DATABASE", 0),
-		KeyPrefix:                 environments.GetString("HELLNET_CACHE_", "HELLNET_", "KEY_PREFIX", "hellnet:cache:"),
-		ConnectTimeout:            environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "CONNECT_TIMEOUT", 5*time.Second),
-		ReadTimeout:               environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "SYNC_TIMEOUT", time.Second),
-		RetryCount:                environments.GetInt("HELLNET_CACHE_", "HELLNET_", "RETRY_COUNT", 2),
-		RetryBaseDelay:            environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "RETRY_BASE_DELAY_MS", 200*time.Millisecond),
-		CircuitBreakerFailures:    environments.GetInt("HELLNET_CACHE_", "HELLNET_", "CB_FAILURES", 5),
-		CircuitBreakerDuration:    environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "CB_DURATION_SEC", 30*time.Second),
-		OperationTimeout:          time.Duration(environments.GetInt("HELLNET_CACHE_", "HELLNET_", "OPERATION_TIMEOUT_MS", 5000)) * time.Millisecond,
-		DefaultSerializer:         environments.GetString("HELLNET_CACHE_", "HELLNET_", "DEFAULT_SERIALIZER", "json"),
-		EnableL1:                  environments.GetBool("HELLNET_CACHE_", "HELLNET_", "ENABLE_L1", true),
-		EnableL2:                  environments.GetBool("HELLNET_CACHE_", "HELLNET_", "ENABLE_L2", true),
-		DefaultTTL:                environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "DEFAULT_TTL", 30*time.Minute),
-		MaxTTL:                    environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "MAX_TTL", 24*time.Hour),
-		TouchOnRead:               environments.GetBool("HELLNET_CACHE_", "HELLNET_", "TOUCH_ON_READ", false),
-		TouchTTL:                  environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "TOUCH_TTL", 10*time.Minute),
+		L1Provider:                cacheEnv("L1_PROVIDER", "memory"),
+		L1SizeLimitMB:             cacheInt("L1_SIZE_LIMIT_MB", "100"),
+		L1DefaultTTL:              cacheDuration("L1_DEFAULT_TTL", "5m"),
+		L1ExpirationScanFrequency: cacheDuration("L1_EXPIRATION_SCAN_FREQUENCY", "1m"),
+		L1SlidingExpiration:       cacheBool("L1_SLIDING_EXPIRATION", "false"),
+		Connection:                cacheEnv("CONNECTION", ""),
+		Password:                  cacheEnv("PASSWORD", ""),
+		Database:                  cacheInt("DATABASE", "0"),
+		KeyPrefix:                 cacheEnv("KEY_PREFIX", "hellnet:cache:"),
+		ConnectTimeout:            cacheDuration("CONNECT_TIMEOUT", "5s"),
+		ReadTimeout:               cacheDuration("SYNC_TIMEOUT", "1s"),
+		RetryCount:                cacheInt("RETRY_COUNT", "2"),
+		RetryBaseDelay:            cacheDuration("RETRY_BASE_DELAY_MS", "200ms"),
+		CircuitBreakerFailures:    cacheInt("CB_FAILURES", "5"),
+		CircuitBreakerDuration:    cacheDuration("CB_DURATION_SEC", "30s"),
+		OperationTimeout:          time.Duration(cacheInt("OPERATION_TIMEOUT_MS", "5000")) * time.Millisecond,
+		DefaultSerializer:         cacheEnv("DEFAULT_SERIALIZER", "json"),
+		EnableL1:                  cacheBool("ENABLE_L1", "true"),
+		EnableL2:                  cacheBool("ENABLE_L2", "true"),
+		DefaultTTL:                cacheDuration("DEFAULT_TTL", "30m"),
+		MaxTTL:                    cacheDuration("MAX_TTL", "24h"),
+		TouchOnRead:               cacheBool("TOUCH_ON_READ", "false"),
+		TouchTTL:                  cacheDuration("TOUCH_TTL", "10m"),
 	}
 	return newWithOptions(ctx, o)
 }
@@ -593,7 +629,7 @@ func (h *HybridCache) warm(key string, data []byte, foundAtIndex int) {
 		// Route the raw L1 default through the same resolution path as user
 		// sets: an oversized L1DefaultTTL must still be clamped by MaxTTL.
 		ttl := h.opts.resolveTTL(h.opts.L1DefaultTTL)
-		for i := 0; i < foundAtIndex; i++ {
+		for i := range foundAtIndex {
 			if err := ctx.Err(); err != nil {
 				// Captured context cancelled or op deadline exceeded — stop
 				// warming early instead of fanning out doomed writes.
