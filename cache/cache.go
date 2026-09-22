@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/guilhermelinosp/hellnet-lib-environments/environments"
+	"github.com/guilhermelinosp/hellnet-lib-telemetry/telemetry"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -247,6 +248,7 @@ type HybridCache struct {
 	serializer Serializer
 	providers  []Provider
 	logger     *log.Logger
+	ops        telemetry.Client
 
 	flight  singleflight.Group // GetOrSet stampede protection, keyed by cache key
 	warming sync.Map           // key string -> struct{}
@@ -352,29 +354,59 @@ func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
 	// touching the caller's context lifecycle (and vice versa).
 	baseCtx, cancel := context.WithCancel(ctx)
 
+	// Telemetry client is attached by the caller via WithTelemetry after New.
+	h := &HybridCache{baseCtx: baseCtx, cancel: cancel, opts: o, logger: log.Default()}
+	if err := h.buildProviders(); err != nil {
+		cancel()
+		return nil, err
+	}
+	return h, nil
+}
+
+// WithTelemetry attaches a telemetry client so Get/GetOrSet report cache_hit /
+// cache_miss counters and GetOrSet emits a cache.get_or_set OTel span.
+// Optional: a nil client keeps the library working un-instrumented.
+func (h *HybridCache) WithTelemetry(ops telemetry.Client) *HybridCache {
+	h.ops = ops
+	return h
+}
+
+// recordAccess increments cache_hit or cache_miss and, when present, runs fn
+// inside a cache.<op> OTel span.
+func (h *HybridCache) recordAccess(op, key string, hit bool) {
+	if h.ops == nil {
+		return
+	}
+	name := "cache_miss"
+	if hit {
+		name = "cache_hit"
+	}
+	if c, err := h.ops.Metric().Counter(name); err == nil {
+		c.Add(h.baseCtx, 1)
+	}
+	_ = h.ops.Span(h.baseCtx, "cache."+op, func(context.Context) error { return nil })
+}
+
+	// buildProviders wires L1 (memory) and/or L2 (external/redis) providers
+// according to Options.
+func (h *HybridCache) buildProviders() error {
 	var providers []Provider
 
-	if o.EnableL1 {
-		mp, err := NewMemoryProvider(o)
+	if h.opts.EnableL1 {
+		mp, err := NewMemoryProvider(h.opts)
 		if err != nil {
-			cancel()
-			return nil, err
+			return err
 		}
 		providers = append(providers, mp)
 	}
 
-	if o.EnableL2 {
-		providers = append(providers, NewExternalProvider(baseCtx, o))
+	if h.opts.EnableL2 {
+		providers = append(providers, NewExternalProvider(h.baseCtx, h.opts))
 	}
 
-	return &HybridCache{
-		baseCtx:    baseCtx,
-		cancel:     cancel,
-		opts:       o,
-		serializer: NewJSONSerializer(),
-		providers:  providers,
-		logger:     log.Default(),
-	}, nil
+	h.providers = providers
+	h.serializer = NewJSONSerializer()
+	return nil
 }
 
 // MustNew is like New but panics on error. Use at startup.
@@ -411,6 +443,7 @@ func (h *HybridCache) opCtx() (context.Context, context.CancelFunc) {
 // the zero value if not found in any layer.
 func (h *HybridCache) Get(key string, out any) error {
 	data, foundAtIndex := h.getRaw(key)
+	h.recordAccess("get", key, foundAtIndex >= 0 && data != nil)
 	if foundAtIndex < 0 || data == nil {
 		return nil // not found; out stays zero value
 	}
@@ -554,47 +587,63 @@ func (h *HybridCache) Healthy() error {
 // cancellation. When calls are coalesced, the shared execution runs under the
 // operation context of the caller that won the execution slot.
 func (h *HybridCache) GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl time.Duration) error {
-	ctx, cancel := h.opCtx()
-	defer cancel()
+	return h.getOrSet(key, out, factory, ttl)
+}
 
-	// fast path: serve hits without contending on the flight group.
-	if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
-		return h.serializer.Deserialize(data, out)
-	}
+// getOrSet implements GetOrSet inside an optional telemetry span.
+func (h *HybridCache) getOrSet(key string, out any, factory func(context.Context) (any, error), ttl time.Duration) error {
+	run := func() error {
+		ctx, cancel := h.opCtx()
+		defer cancel()
 
-	type flightResult struct{ data []byte }
-
-	res, err, _ := h.flight.Do(key, func() (any, error) {
-		// double-check after winning the execution slot: another call may
-		// have populated the entry between our fast path and acquiring the key.
+		// fast path: serve hits without contending on the flight group.
 		if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
+			h.recordAccess("get_or_set", key, true)
+			return h.serializer.Deserialize(data, out)
+		}
+		h.recordAccess("get_or_set", key, false)
+
+		type flightResult struct{ data []byte }
+
+		res, err, _ := h.flight.Do(key, func() (any, error) {
+			// double-check after winning the execution slot: another call may
+			// have populated the entry between our fast path and acquiring the key.
+			if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
+				return flightResult{data: data}, nil
+			}
+
+			value, ferr := factory(ctx)
+			if ferr != nil {
+				return nil, ferr
+			}
+			// Serialize once; SetBytes persists it and out is populated from the
+			// same bytes below — also for coalesced waiters.
+			data, serr := h.serializer.Serialize(value)
+			if serr != nil {
+				return nil, serr
+			}
+			if serr := h.SetBytes(key, data, ttl); serr != nil {
+				return nil, serr
+			}
 			return flightResult{data: data}, nil
+		})
+		if err != nil {
+			return err
 		}
 
-		value, ferr := factory(ctx)
-		if ferr != nil {
-			return nil, ferr
+		fr, ok := res.(flightResult)
+		if !ok || fr.data == nil {
+			return nil // unreachable with current callback; defensive
 		}
-		// Serialize once; SetBytes persists it and out is populated from the
-		// same bytes below — also for coalesced waiters.
-		data, serr := h.serializer.Serialize(value)
-		if serr != nil {
-			return nil, serr
-		}
-		if serr := h.SetBytes(key, data, ttl); serr != nil {
-			return nil, serr
-		}
-		return flightResult{data: data}, nil
-	})
-	if err != nil {
-		return err
+		return h.serializer.Deserialize(fr.data, out)
 	}
 
-	fr, ok := res.(flightResult)
-	if !ok || fr.data == nil {
-		return nil // unreachable with current callback; defensive
+	if h.ops != nil {
+		return h.ops.Span(h.baseCtx, "cache.get_or_set", func(context.Context) error {
+			return run()
+		})
 	}
-	return h.serializer.Deserialize(fr.data, out)
+	return run()
 }
 
 // Close releases all providers and cancels the context captured at New,
