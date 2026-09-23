@@ -10,7 +10,7 @@
 //
 // Context model: the library creates and owns a base context at construction.
 // Individual operations never take a context; each one runs under an internally
-// derived timeout configured through HELLNET_CACHE_OPERATION_TIMEOUT_MS.
+// derived timeout configured through CACHE_OPERATION_TIMEOUT_MS.
 package cache
 
 import (
@@ -88,7 +88,7 @@ type Options struct {
 	// OperationTimeout bounds every cache operation issued by this library
 	// (get/set/remove/get-or-set/warm/touch/health-check). Zero or negative
 	// values fall back to defaultOperationTimeout (5s). Environment override:
-	// HELLNET_CACHE_OPERATION_TIMEOUT_MS (integer milliseconds).
+	// CACHE_OPERATION_TIMEOUT_MS (integer milliseconds).
 	OperationTimeout time.Duration
 
 	DefaultSerializer string
@@ -106,7 +106,7 @@ func (o Options) validate() error {
 	var missing []string
 	if o.EnableL2 {
 		if o.Connection == "" {
-			missing = append(missing, "HELLNET_CACHE_CONNECTION")
+			missing = append(missing, "CACHE_CONNECTION")
 		}
 	}
 	if len(missing) == 0 {
@@ -114,7 +114,7 @@ func (o Options) validate() error {
 	}
 	return fmt.Errorf("hellnet-cache: required environment variables are missing: %v\n"+
 		"set them before startup, e.g.:\n"+
-		"  export HELLNET_CACHE_CONNECTION=localhost:6379", missing)
+		"  export CACHE_CONNECTION=localhost:6379", missing)
 }
 
 // formatKey applies the external backend key prefix.
@@ -265,49 +265,38 @@ type HybridCache struct {
 // abstraction after API surface changes.
 var _ Cache = (*HybridCache)(nil)
 
-// cacheEnvName selects the service-specific variable and preserves the generic
-// HELLNET_* fallback without duplicating typed parsing from environments.
-func cacheEnvName(name string) string {
-	specific := "HELLNET_CACHE_" + name
-	if environments.Get(specific, "") != "" {
-		return specific
-	}
-	return "HELLNET_" + name
-}
-
 // New follows the hellnet-lib-telemetry constructor pattern: it creates the
-// base context, loads .env, and resolves configuration from HELLNET_CACHE_*
-// with HELLNET_* as fallback.
-// If L2 is enabled but no HELLNET_CACHE_CONNECTION is present, the library
+// base context, loads .env, and resolves configuration from CACHE_* variables.
+// If L2 is enabled but no CACHE_CONNECTION is present, the library
 // automatically falls back to memory-only (L2 disabled) instead of erroring.
 func New(ctx context.Context, ops telemetry.Client) (*HybridCache, error) {
 
 	_ = environments.LoadDotEnv()
 
 	o := Options{
-		L1Provider:                environments.Get(cacheEnvName("L1_PROVIDER"), "memory"),
-		L1SizeLimitMB:             environments.GetInt(cacheEnvName("L1_SIZE_LIMIT_MB"), "100"),
-		L1DefaultTTL:              environments.GetDuration(cacheEnvName("L1_DEFAULT_TTL"), "5m"),
-		L1ExpirationScanFrequency: environments.GetDuration(cacheEnvName("L1_EXPIRATION_SCAN_FREQUENCY"), "1m"),
-		L1SlidingExpiration:       environments.GetBool(cacheEnvName("L1_SLIDING_EXPIRATION"), "false"),
-		Connection:                environments.Get(cacheEnvName("CONNECTION"), ""),
-		Password:                  environments.Get(cacheEnvName("PASSWORD"), ""),
-		Database:                  environments.GetInt(cacheEnvName("DATABASE"), "0"),
-		KeyPrefix:                 environments.Get(cacheEnvName("KEY_PREFIX"), "hellnet:cache:"),
-		ConnectTimeout:            environments.GetDuration(cacheEnvName("CONNECT_TIMEOUT"), "5s"),
-		ReadTimeout:               environments.GetDuration(cacheEnvName("SYNC_TIMEOUT"), "1s"),
-		RetryCount:                environments.GetInt(cacheEnvName("RETRY_COUNT"), "2"),
-		RetryBaseDelay:            environments.GetDuration(cacheEnvName("RETRY_BASE_DELAY_MS"), "200ms"),
-		CircuitBreakerFailures:    environments.GetInt(cacheEnvName("CB_FAILURES"), "5"),
-		CircuitBreakerDuration:    environments.GetDuration(cacheEnvName("CB_DURATION_SEC"), "30s"),
-		OperationTimeout:          time.Duration(environments.GetInt(cacheEnvName("OPERATION_TIMEOUT_MS"), "5000")) * time.Millisecond,
-		DefaultSerializer:         environments.Get(cacheEnvName("DEFAULT_SERIALIZER"), "json"),
-		EnableL1:                  environments.GetBool(cacheEnvName("ENABLE_L1"), "true"),
-		EnableL2:                  environments.GetBool(cacheEnvName("ENABLE_L2"), "true"),
-		DefaultTTL:                environments.GetDuration(cacheEnvName("DEFAULT_TTL"), "30m"),
-		MaxTTL:                    environments.GetDuration(cacheEnvName("MAX_TTL"), "24h"),
-		TouchOnRead:               environments.GetBool(cacheEnvName("TOUCH_ON_READ"), "false"),
-		TouchTTL:                  environments.GetDuration(cacheEnvName("TOUCH_TTL"), "10m"),
+		L1Provider:                environments.Get("CACHE_L1_PROVIDER", "memory"),
+		L1SizeLimitMB:             environments.GetInt("CACHE_L1_SIZE_LIMIT_MB", "100"),
+		L1DefaultTTL:              environments.GetDuration("CACHE_L1_DEFAULT_TTL", "5m"),
+		L1ExpirationScanFrequency: environments.GetDuration("CACHE_L1_EXPIRATION_SCAN_FREQUENCY", "1m"),
+		L1SlidingExpiration:       environments.GetBool("CACHE_L1_SLIDING_EXPIRATION", "false"),
+		Connection:                environments.Get("CACHE_CONNECTION", ""),
+		Password:                  environments.Get("CACHE_PASSWORD", ""),
+		Database:                  environments.GetInt("CACHE_DATABASE", "0"),
+		KeyPrefix:                 environments.Get("CACHE_KEY_PREFIX", "hellnet:cache:"),
+		ConnectTimeout:            environments.GetDuration("CACHE_CONNECT_TIMEOUT", "5s"),
+		ReadTimeout:               environments.GetDuration("CACHE_SYNC_TIMEOUT", "1s"),
+		RetryCount:                environments.GetInt("CACHE_RETRY_COUNT", "2"),
+		RetryBaseDelay:            environments.GetDuration("CACHE_RETRY_BASE_DELAY_MS", "200ms"),
+		CircuitBreakerFailures:    environments.GetInt("CACHE_CB_FAILURES", "5"),
+		CircuitBreakerDuration:    environments.GetDuration("CACHE_CB_DURATION_SEC", "30s"),
+		OperationTimeout:          time.Duration(environments.GetInt("CACHE_OPERATION_TIMEOUT_MS", "5000")) * time.Millisecond,
+		DefaultSerializer:         environments.Get("CACHE_DEFAULT_SERIALIZER", "json"),
+		EnableL1:                  environments.GetBool("CACHE_ENABLE_L1", "true"),
+		EnableL2:                  environments.GetBool("CACHE_ENABLE_L2", "true"),
+		DefaultTTL:                environments.GetDuration("CACHE_DEFAULT_TTL", "30m"),
+		MaxTTL:                    environments.GetDuration("CACHE_MAX_TTL", "24h"),
+		TouchOnRead:               environments.GetBool("CACHE_TOUCH_ON_READ", "false"),
+		TouchTTL:                  environments.GetDuration("CACHE_TOUCH_TTL", "10m"),
 	}
 	h, err := newWithOptions(ctx, o)
 	if err != nil {
@@ -320,7 +309,7 @@ func New(ctx context.Context, ops telemetry.Client) (*HybridCache, error) {
 // newWithOptions is the explicit construction seam used by package tests.
 func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
 	if o.EnableL2 && o.Connection == "" {
-		log.Printf("[hellnet-cache] HELLNET_CACHE_CONNECTION not set — falling back to memory-only (L2 disabled)")
+		log.Printf("[hellnet-cache] CACHE_CONNECTION not set — falling back to memory-only (L2 disabled)")
 		o.EnableL2 = false
 	}
 

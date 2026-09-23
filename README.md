@@ -41,7 +41,7 @@ Cache é a **geladeira da casa**. O banco de dados é o **mercado**:
 ### Primeiras linhas
 
 ```go
-c, err := cache.New() // carrega HELLNET_CACHE_* sozinho
+c, err := cache.New() // carrega CACHE_* sozinho
 
 var menu map[string]string
 err = c.GetOrSet("menu-de-hoje", &menu, func(ctx context.Context) (any, error) {
@@ -53,7 +53,7 @@ Linha por linha:
 
 1. `cache.New()` — monta a geladeira (L1) e a despensa (L2), cria seu contexto
    interno e lê as variáveis de ambiente; nenhuma operação recebe contexto.
-2. A biblioteca lê primeiro `HELLNET_CACHE_*` e usa `HELLNET_*` como fallback.
+2. A biblioteca lê as variáveis `CACHE_*`.
    Toda operação roda com timeout interno
    (`Options.OperationTimeout`, padrão `5s`).
 3. `GetOrSet("menu-de-hoje", ...)` — checa geladeira e despensa pela chave.
@@ -92,8 +92,7 @@ import (
 )
 
 func main() {
-	// New() owns its context, loads .env, and resolves HELLNET_CACHE_* with
-	// HELLNET_* fallback before deciding L1/L2.
+	// New() owns its context, loads .env, and resolves CACHE_* before deciding L1/L2.
 	c, err := cache.New()
 	if err != nil {
 		log.Fatal(err)
@@ -125,8 +124,8 @@ func main() {
 ### Minimal env
 
 ```bash
-export HELLNET_CACHE_CONNECTION=localhost:6379
-# optional: export HELLNET_CACHE_PASSWORD=...
+export CACHE_CONNECTION=localhost:6379
+# optional: export CACHE_PASSWORD=...
 ```
 
 ## Usage
@@ -157,7 +156,7 @@ func (s *OrderService) Invalidate(id string) error {
 operation and background goroutine (warming/touch). There are no `*Context`
 method variants. Each operation runs under an internally derived
 timeout bounded by `OperationTimeout` (default `5s`, env-tunable via
-`HELLNET_CACHE_OPERATION_TIMEOUT_MS`); L2 network calls additionally honor
+`CACHE_OPERATION_TIMEOUT_MS`); L2 network calls additionally honor
 `ConnectTimeout`/`ReadTimeout`. Calling `Close()` aborts all in-flight
 library work.
 
@@ -305,7 +304,7 @@ L1 uses **absolute expiration** by default. Sliding is opt-in via
 
 ## Options
 
-### Env vars (`HELLNET_CACHE_*`)
+### Env vars (`CACHE_*`)
 
 | Env var                            | Default              | Description                    |
 |------------------------------------|----------------------|--------------------------------|
