@@ -181,12 +181,12 @@ func TestHybrid_Stampede(t *testing.T) {
 }
 
 func TestOptions_EnvBinding(t *testing.T) {
-	t.Setenv("HELLNET_CACHE_CONNECTION", "cache.example:6379")
-	t.Setenv("HELLNET_CACHE_PASSWORD", "secret")
-	t.Setenv("HELLNET_CACHE_DEFAULT_TTL", "1h")
-	t.Setenv("HELLNET_CACHE_ENABLE_L2", "true")
+	t.Setenv("CACHE_CONNECTION", "cache.example:6379")
+	t.Setenv("CACHE_PASSWORD", "secret")
+	t.Setenv("CACHE_DEFAULT_TTL", "1h")
+	t.Setenv("CACHE_ENABLE_L2", "true")
 
-	c, err := New()
+	c, err := New(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,21 +206,9 @@ func TestOptions_EnvBinding(t *testing.T) {
 	}
 }
 
-func TestOptions_GenericFallbackAndSpecificPrecedence(t *testing.T) {
-	t.Setenv("HELLNET_CONNECTION", "generic:6379")
-	t.Setenv("HELLNET_CACHE_CONNECTION", "")
-
-	c, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := c.opts.Connection; got != "generic:6379" {
-		t.Fatalf("generic fallback connection = %q, want generic:6379", got)
-	}
-	_ = c.Close()
-
-	t.Setenv("HELLNET_CACHE_CONNECTION", "cache-specific:6379")
-	c, err = New()
+func TestOptions_SpecificEnvBinding(t *testing.T) {
+	t.Setenv("CACHE_CONNECTION", "cache-specific:6379")
+	c, err := New(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,8 +220,8 @@ func TestOptions_GenericFallbackAndSpecificPrecedence(t *testing.T) {
 
 func TestOptions_RequiredEnvMissing(t *testing.T) {
 	// Ensure no connection leaks in (password is optional, only connection matters).
-	t.Setenv("HELLNET_CACHE_CONNECTION", "")
-	t.Setenv("HELLNET_CACHE_PASSWORD", "")
+	t.Setenv("CACHE_CONNECTION", "")
+	t.Setenv("CACHE_PASSWORD", "")
 	o := testDefaultOptions()
 	o.EnableL2 = true
 	if err := o.validate(); err == nil {
@@ -243,8 +231,8 @@ func TestOptions_RequiredEnvMissing(t *testing.T) {
 
 func TestOptions_PasswordOptional(t *testing.T) {
 	// connection present, password absent -> valid (no-auth backend)
-	t.Setenv("HELLNET_CACHE_CONNECTION", "localhost:6379")
-	t.Setenv("HELLNET_CACHE_PASSWORD", "")
+	t.Setenv("CACHE_CONNECTION", "localhost:6379")
+	t.Setenv("CACHE_PASSWORD", "")
 	o := testDefaultOptions()
 	o.Connection = "localhost:6379"
 	if err := o.validate(); err != nil {
@@ -253,14 +241,14 @@ func TestOptions_PasswordOptional(t *testing.T) {
 }
 
 func TestOptions_ClockDuration(t *testing.T) {
-	d, err := environments.ParseDuration("00:05:00")
+	d, err := time.ParseDuration("5m")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d != 5*time.Minute {
 		t.Fatalf("got %v want 5m", d)
 	}
-	d, err = environments.ParseDuration("24:00:00")
+	d, err = time.ParseDuration("24h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +258,7 @@ func TestOptions_ClockDuration(t *testing.T) {
 }
 
 // optsL2Real returns options pointing at a real external backend (Redis/Valkey)
-// read from the environment. If HELLNET_CACHE_CONNECTION is unset, the test is
+// read from the environment. If CACHE_CONNECTION is unset, the test is
 // skipped — this keeps the unit suite hermetic while enabling real integration
 // runs when a backend is available.
 func optsL2Real(t *testing.T) Options {
@@ -278,15 +266,15 @@ func optsL2Real(t *testing.T) Options {
 	// Load .env if present (cwd or alongside executable) so integration tests
 	// honor a repo-level .env, not just process environment variables.
 	_ = environments.LoadDotEnv()
-	conn := os.Getenv("HELLNET_CACHE_CONNECTION")
+	conn := os.Getenv("CACHE_CONNECTION")
 	if conn == "" {
-		t.Skip("HELLNET_CACHE_CONNECTION not set; skipping L2 integration test")
+		t.Skip("CACHE_CONNECTION not set; skipping L2 integration test")
 	}
 	o := testDefaultOptions()
 	o.EnableL1 = true
 	o.EnableL2 = true
 	o.Connection = conn
-	o.Password = os.Getenv("HELLNET_CACHE_PASSWORD") // optional
+	o.Password = os.Getenv("CACHE_PASSWORD") // optional
 	if err := o.validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -415,11 +403,11 @@ func TestIntegration_L2Remove(t *testing.T) {
 // New must degrade to memory-only automatically when L2 is enabled but no
 // connection is configured — the decision lives in the library, not the caller.
 func TestNew_DegradesToMemoryOnlyWithoutConnection(t *testing.T) {
-	t.Setenv("HELLNET_CACHE_CONNECTION", "")
-	t.Setenv("HELLNET_CACHE_ENV_FILE", "")
+	t.Setenv("CACHE_CONNECTION", "")
+	t.Setenv("CACHE_ENV_FILE", "")
 	t.Setenv("HELLNET_ENVIRONMENT", "Development")
 
-	c, err := New()
+	c, err := New(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("New() should not error on missing connection (degrades): %v", err)
 	}
@@ -446,9 +434,9 @@ func TestNew_DegradesToMemoryOnlyWithoutConnection(t *testing.T) {
 // The OperationTimeout knob must be bindable from env (integer milliseconds)
 // and default to 5s.
 func TestOptions_OperationTimeoutEnvBinding(t *testing.T) {
-	t.Setenv("HELLNET_CACHE_OPERATION_TIMEOUT_MS", "250")
+	t.Setenv("CACHE_OPERATION_TIMEOUT_MS", "250")
 
-	c, err := New()
+	c, err := New(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

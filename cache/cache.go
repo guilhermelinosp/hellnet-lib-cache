@@ -10,7 +10,7 @@
 //
 // Context model: the library creates and owns a base context at construction.
 // Individual operations never take a context; each one runs under an internally
-// derived timeout configured through HELLNET_CACHE_OPERATION_TIMEOUT_MS.
+// derived timeout configured through CACHE_OPERATION_TIMEOUT_MS.
 package cache
 
 import (
@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/guilhermelinosp/hellnet-lib-environments/environments"
+	"github.com/guilhermelinosp/hellnet-lib-telemetry/telemetry"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -87,7 +88,7 @@ type Options struct {
 	// OperationTimeout bounds every cache operation issued by this library
 	// (get/set/remove/get-or-set/warm/touch/health-check). Zero or negative
 	// values fall back to defaultOperationTimeout (5s). Environment override:
-	// HELLNET_CACHE_OPERATION_TIMEOUT_MS (integer milliseconds).
+	// CACHE_OPERATION_TIMEOUT_MS (integer milliseconds).
 	OperationTimeout time.Duration
 
 	DefaultSerializer string
@@ -105,7 +106,7 @@ func (o Options) validate() error {
 	var missing []string
 	if o.EnableL2 {
 		if o.Connection == "" {
-			missing = append(missing, "HELLNET_CACHE_CONNECTION")
+			missing = append(missing, "CACHE_CONNECTION")
 		}
 	}
 	if len(missing) == 0 {
@@ -113,7 +114,7 @@ func (o Options) validate() error {
 	}
 	return fmt.Errorf("hellnet-cache: required environment variables are missing: %v\n"+
 		"set them before startup, e.g.:\n"+
-		"  export HELLNET_CACHE_CONNECTION=localhost:6379", missing)
+		"  export CACHE_CONNECTION=localhost:6379", missing)
 }
 
 // formatKey applies the external backend key prefix.
@@ -247,6 +248,7 @@ type HybridCache struct {
 	serializer Serializer
 	providers  []Provider
 	logger     *log.Logger
+	ops        telemetry.Client
 
 	flight  singleflight.Group // GetOrSet stampede protection, keyed by cache key
 	warming sync.Map           // key string -> struct{}
@@ -264,47 +266,50 @@ type HybridCache struct {
 var _ Cache = (*HybridCache)(nil)
 
 // New follows the hellnet-lib-telemetry constructor pattern: it creates the
-// base context, loads .env, and resolves configuration from HELLNET_CACHE_*
-// with HELLNET_* as fallback.
-// If L2 is enabled but no HELLNET_CACHE_CONNECTION is present, the library
+// base context, loads .env, and resolves configuration from CACHE_* variables.
+// If L2 is enabled but no CACHE_CONNECTION is present, the library
 // automatically falls back to memory-only (L2 disabled) instead of erroring.
-func New() (*HybridCache, error) {
-	ctx := context.Background()
+func New(ctx context.Context, ops telemetry.Client) (*HybridCache, error) {
 
 	_ = environments.LoadDotEnv()
 
 	o := Options{
-		L1Provider:                environments.GetString("HELLNET_CACHE_", "HELLNET_", "L1_PROVIDER", "memory"),
-		L1SizeLimitMB:             environments.GetInt("HELLNET_CACHE_", "HELLNET_", "L1_SIZE_LIMIT_MB", 100),
-		L1DefaultTTL:              environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "L1_DEFAULT_TTL", 5*time.Minute),
-		L1ExpirationScanFrequency: environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "L1_EXPIRATION_SCAN_FREQUENCY", time.Minute),
-		L1SlidingExpiration:       environments.GetBool("HELLNET_CACHE_", "HELLNET_", "L1_SLIDING_EXPIRATION", false),
-		Connection:                environments.GetString("HELLNET_CACHE_", "HELLNET_", "CONNECTION", ""),
-		Password:                  environments.GetString("HELLNET_CACHE_", "HELLNET_", "PASSWORD", ""),
-		Database:                  environments.GetInt("HELLNET_CACHE_", "HELLNET_", "DATABASE", 0),
-		KeyPrefix:                 environments.GetString("HELLNET_CACHE_", "HELLNET_", "KEY_PREFIX", "hellnet:cache:"),
-		ConnectTimeout:            environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "CONNECT_TIMEOUT", 5*time.Second),
-		ReadTimeout:               environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "SYNC_TIMEOUT", time.Second),
-		RetryCount:                environments.GetInt("HELLNET_CACHE_", "HELLNET_", "RETRY_COUNT", 2),
-		RetryBaseDelay:            environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "RETRY_BASE_DELAY_MS", 200*time.Millisecond),
-		CircuitBreakerFailures:    environments.GetInt("HELLNET_CACHE_", "HELLNET_", "CB_FAILURES", 5),
-		CircuitBreakerDuration:    environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "CB_DURATION_SEC", 30*time.Second),
-		OperationTimeout:          time.Duration(environments.GetInt("HELLNET_CACHE_", "HELLNET_", "OPERATION_TIMEOUT_MS", 5000)) * time.Millisecond,
-		DefaultSerializer:         environments.GetString("HELLNET_CACHE_", "HELLNET_", "DEFAULT_SERIALIZER", "json"),
-		EnableL1:                  environments.GetBool("HELLNET_CACHE_", "HELLNET_", "ENABLE_L1", true),
-		EnableL2:                  environments.GetBool("HELLNET_CACHE_", "HELLNET_", "ENABLE_L2", true),
-		DefaultTTL:                environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "DEFAULT_TTL", 30*time.Minute),
-		MaxTTL:                    environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "MAX_TTL", 24*time.Hour),
-		TouchOnRead:               environments.GetBool("HELLNET_CACHE_", "HELLNET_", "TOUCH_ON_READ", false),
-		TouchTTL:                  environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "TOUCH_TTL", 10*time.Minute),
+		L1Provider:                environments.Get("CACHE_L1_PROVIDER", "memory"),
+		L1SizeLimitMB:             environments.GetInt("CACHE_L1_SIZE_LIMIT_MB", "100"),
+		L1DefaultTTL:              environments.GetDuration("CACHE_L1_DEFAULT_TTL", "5m"),
+		L1ExpirationScanFrequency: environments.GetDuration("CACHE_L1_EXPIRATION_SCAN_FREQUENCY", "1m"),
+		L1SlidingExpiration:       environments.GetBool("CACHE_L1_SLIDING_EXPIRATION", "false"),
+		Connection:                environments.Get("CACHE_CONNECTION", ""),
+		Password:                  environments.Get("CACHE_PASSWORD", ""),
+		Database:                  environments.GetInt("CACHE_DATABASE", "0"),
+		KeyPrefix:                 environments.Get("CACHE_KEY_PREFIX", "hellnet:cache:"),
+		ConnectTimeout:            environments.GetDuration("CACHE_CONNECT_TIMEOUT", "5s"),
+		ReadTimeout:               environments.GetDuration("CACHE_SYNC_TIMEOUT", "1s"),
+		RetryCount:                environments.GetInt("CACHE_RETRY_COUNT", "2"),
+		RetryBaseDelay:            environments.GetDuration("CACHE_RETRY_BASE_DELAY_MS", "200ms"),
+		CircuitBreakerFailures:    environments.GetInt("CACHE_CB_FAILURES", "5"),
+		CircuitBreakerDuration:    environments.GetDuration("CACHE_CB_DURATION_SEC", "30s"),
+		OperationTimeout:          time.Duration(environments.GetInt("CACHE_OPERATION_TIMEOUT_MS", "5000")) * time.Millisecond,
+		DefaultSerializer:         environments.Get("CACHE_DEFAULT_SERIALIZER", "json"),
+		EnableL1:                  environments.GetBool("CACHE_ENABLE_L1", "true"),
+		EnableL2:                  environments.GetBool("CACHE_ENABLE_L2", "true"),
+		DefaultTTL:                environments.GetDuration("CACHE_DEFAULT_TTL", "30m"),
+		MaxTTL:                    environments.GetDuration("CACHE_MAX_TTL", "24h"),
+		TouchOnRead:               environments.GetBool("CACHE_TOUCH_ON_READ", "false"),
+		TouchTTL:                  environments.GetDuration("CACHE_TOUCH_TTL", "10m"),
 	}
-	return newWithOptions(ctx, o)
+	h, err := newWithOptions(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	h.ops = ops
+	return h, nil
 }
 
 // newWithOptions is the explicit construction seam used by package tests.
 func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
 	if o.EnableL2 && o.Connection == "" {
-		log.Printf("[hellnet-cache] HELLNET_CACHE_CONNECTION not set — falling back to memory-only (L2 disabled)")
+		log.Printf("[hellnet-cache] CACHE_CONNECTION not set — falling back to memory-only (L2 disabled)")
 		o.EnableL2 = false
 	}
 
@@ -316,34 +321,55 @@ func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
 	// touching the caller's context lifecycle (and vice versa).
 	baseCtx, cancel := context.WithCancel(ctx)
 
+	h := &HybridCache{baseCtx: baseCtx, cancel: cancel, opts: o, logger: log.Default()}
+	if err := h.buildProviders(); err != nil {
+		cancel()
+		return nil, err
+	}
+	return h, nil
+}
+
+// recordAccess increments cache_hit or cache_miss. The operation span is
+// created by the enclosing operation so hits and misses do not create a second
+// empty span.
+func (h *HybridCache) recordAccess(op, key string, hit bool) {
+	if h.ops == nil {
+		return
+	}
+	name := "cache_miss"
+	if hit {
+		name = "cache_hit"
+	}
+	if c, err := h.ops.Metric().Counter(name); err == nil {
+		c.Add(h.baseCtx, 1)
+	}
+}
+
+// buildProviders wires L1 (memory) and/or L2 (external/redis) providers
+// according to Options.
+func (h *HybridCache) buildProviders() error {
 	var providers []Provider
 
-	if o.EnableL1 {
-		mp, err := NewMemoryProvider(o)
+	if h.opts.EnableL1 {
+		mp, err := NewMemoryProvider(h.opts)
 		if err != nil {
-			cancel()
-			return nil, err
+			return err
 		}
 		providers = append(providers, mp)
 	}
 
-	if o.EnableL2 {
-		providers = append(providers, NewExternalProvider(baseCtx, o))
+	if h.opts.EnableL2 {
+		providers = append(providers, NewExternalProvider(h.baseCtx, h.opts))
 	}
 
-	return &HybridCache{
-		baseCtx:    baseCtx,
-		cancel:     cancel,
-		opts:       o,
-		serializer: NewJSONSerializer(),
-		providers:  providers,
-		logger:     log.Default(),
-	}, nil
+	h.providers = providers
+	h.serializer = NewJSONSerializer()
+	return nil
 }
 
 // MustNew is like New but panics on error. Use at startup.
-func MustNew() *HybridCache {
-	c, err := New()
+func MustNew(ctx context.Context, ops telemetry.Client) *HybridCache {
+	c, err := New(ctx, ops)
 	if err != nil {
 		panic(err)
 	}
@@ -375,6 +401,7 @@ func (h *HybridCache) opCtx() (context.Context, context.CancelFunc) {
 // the zero value if not found in any layer.
 func (h *HybridCache) Get(key string, out any) error {
 	data, foundAtIndex := h.getRaw(key)
+	h.recordAccess("get", key, foundAtIndex >= 0 && data != nil)
 	if foundAtIndex < 0 || data == nil {
 		return nil // not found; out stays zero value
 	}
@@ -518,47 +545,63 @@ func (h *HybridCache) Healthy() error {
 // cancellation. When calls are coalesced, the shared execution runs under the
 // operation context of the caller that won the execution slot.
 func (h *HybridCache) GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl time.Duration) error {
-	ctx, cancel := h.opCtx()
-	defer cancel()
+	return h.getOrSet(key, out, factory, ttl)
+}
 
-	// fast path: serve hits without contending on the flight group.
-	if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
-		return h.serializer.Deserialize(data, out)
-	}
+// getOrSet implements GetOrSet inside an optional telemetry span.
+func (h *HybridCache) getOrSet(key string, out any, factory func(context.Context) (any, error), ttl time.Duration) error {
+	run := func() error {
+		ctx, cancel := h.opCtx()
+		defer cancel()
 
-	type flightResult struct{ data []byte }
-
-	res, err, _ := h.flight.Do(key, func() (any, error) {
-		// double-check after winning the execution slot: another call may
-		// have populated the entry between our fast path and acquiring the key.
+		// fast path: serve hits without contending on the flight group.
 		if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
+			h.recordAccess("get_or_set", key, true)
+			return h.serializer.Deserialize(data, out)
+		}
+		h.recordAccess("get_or_set", key, false)
+
+		type flightResult struct{ data []byte }
+
+		res, err, _ := h.flight.Do(key, func() (any, error) {
+			// double-check after winning the execution slot: another call may
+			// have populated the entry between our fast path and acquiring the key.
+			if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
+				return flightResult{data: data}, nil
+			}
+
+			value, ferr := factory(ctx)
+			if ferr != nil {
+				return nil, ferr
+			}
+			// Serialize once; SetBytes persists it and out is populated from the
+			// same bytes below — also for coalesced waiters.
+			data, serr := h.serializer.Serialize(value)
+			if serr != nil {
+				return nil, serr
+			}
+			if serr := h.SetBytes(key, data, ttl); serr != nil {
+				return nil, serr
+			}
 			return flightResult{data: data}, nil
+		})
+		if err != nil {
+			return err
 		}
 
-		value, ferr := factory(ctx)
-		if ferr != nil {
-			return nil, ferr
+		fr, ok := res.(flightResult)
+		if !ok || fr.data == nil {
+			return nil // unreachable with current callback; defensive
 		}
-		// Serialize once; SetBytes persists it and out is populated from the
-		// same bytes below — also for coalesced waiters.
-		data, serr := h.serializer.Serialize(value)
-		if serr != nil {
-			return nil, serr
-		}
-		if serr := h.SetBytes(key, data, ttl); serr != nil {
-			return nil, serr
-		}
-		return flightResult{data: data}, nil
-	})
-	if err != nil {
-		return err
+		return h.serializer.Deserialize(fr.data, out)
 	}
 
-	fr, ok := res.(flightResult)
-	if !ok || fr.data == nil {
-		return nil // unreachable with current callback; defensive
+	if h.ops != nil {
+		return h.ops.WithSpan("cache.get_or_set", func(context.Context) error {
+			return run()
+		})
 	}
-	return h.serializer.Deserialize(fr.data, out)
+	return run()
 }
 
 // Close releases all providers and cancels the context captured at New,
@@ -593,7 +636,7 @@ func (h *HybridCache) warm(key string, data []byte, foundAtIndex int) {
 		// Route the raw L1 default through the same resolution path as user
 		// sets: an oversized L1DefaultTTL must still be clamped by MaxTTL.
 		ttl := h.opts.resolveTTL(h.opts.L1DefaultTTL)
-		for i := 0; i < foundAtIndex; i++ {
+		for i := range foundAtIndex {
 			if err := ctx.Err(); err != nil {
 				// Captured context cancelled or op deadline exceeded — stop
 				// warming early instead of fanning out doomed writes.

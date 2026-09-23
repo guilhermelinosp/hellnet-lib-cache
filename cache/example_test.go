@@ -6,14 +6,14 @@ import (
 	"os"
 	"time"
 
-	cache "github.com/guilhermelinosp/hellnet-lib-cache/cache"
+	"github.com/guilhermelinosp/hellnet-lib-cache/cache"
 )
 
 // memCache builds a memory-only cache through the public zero-config API.
 func memCache() *cache.HybridCache {
-	_ = os.Setenv("HELLNET_CACHE_ENABLE_L1", "true")
-	_ = os.Setenv("HELLNET_CACHE_ENABLE_L2", "false")
-	c, _ := cache.New()
+	_ = os.Setenv("CACHE_ENABLE_L1", "true")
+	_ = os.Setenv("CACHE_ENABLE_L2", "false")
+	c, _ := cache.New(context.Background(), nil)
 	return c
 }
 
