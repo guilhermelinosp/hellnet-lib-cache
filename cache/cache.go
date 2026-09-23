@@ -265,40 +265,14 @@ type HybridCache struct {
 // abstraction after API surface changes.
 var _ Cache = (*HybridCache)(nil)
 
-// cacheEnv resolves a cache option from HELLNET_CACHE_<name> first, falling
-// back to HELLNET_<name> (generic), then def. Returns the env VALUE.
-func cacheEnv(name, def string) string {
-	if v := environments.Get("HELLNET_CACHE_"+name, ""); v != "" {
-		return v
+// cacheEnvName selects the service-specific variable and preserves the generic
+// HELLNET_* fallback without duplicating typed parsing from environments.
+func cacheEnvName(name string) string {
+	specific := "HELLNET_CACHE_" + name
+	if environments.Get(specific, "") != "" {
+		return specific
 	}
-	return environments.Get("HELLNET_"+name, def)
-}
-
-// cacheInt reads an int option from HELLNET_CACHE_<name> with HELLNET_<name>
-// fallback.
-func cacheInt(name, def string) int {
-	if v := environments.Get("HELLNET_CACHE_"+name, ""); v != "" {
-		return environments.GetInt("HELLNET_CACHE_"+name, def)
-	}
-	return environments.GetInt("HELLNET_"+name, def)
-}
-
-// cacheDuration reads a duration option from HELLNET_CACHE_<name> with
-// HELLNET_<name> fallback.
-func cacheDuration(name, def string) time.Duration {
-	if v := environments.Get("HELLNET_CACHE_"+name, ""); v != "" {
-		return environments.GetDuration("HELLNET_CACHE_"+name, def)
-	}
-	return environments.GetDuration("HELLNET_"+name, def)
-}
-
-// cacheBool reads a bool option from HELLNET_CACHE_<name> with HELLNET_<name>
-// fallback.
-func cacheBool(name, def string) bool {
-	if v := environments.Get("HELLNET_CACHE_"+name, ""); v != "" {
-		return environments.GetBool("HELLNET_CACHE_"+name, def)
-	}
-	return environments.GetBool("HELLNET_"+name, def)
+	return "HELLNET_" + name
 }
 
 // New follows the hellnet-lib-telemetry constructor pattern: it creates the
@@ -311,29 +285,29 @@ func New(ctx context.Context, ops telemetry.Client) (*HybridCache, error) {
 	_ = environments.LoadDotEnv()
 
 	o := Options{
-		L1Provider:                cacheEnv("L1_PROVIDER", "memory"),
-		L1SizeLimitMB:             cacheInt("L1_SIZE_LIMIT_MB", "100"),
-		L1DefaultTTL:              cacheDuration("L1_DEFAULT_TTL", "5m"),
-		L1ExpirationScanFrequency: cacheDuration("L1_EXPIRATION_SCAN_FREQUENCY", "1m"),
-		L1SlidingExpiration:       cacheBool("L1_SLIDING_EXPIRATION", "false"),
-		Connection:                cacheEnv("CONNECTION", ""),
-		Password:                  cacheEnv("PASSWORD", ""),
-		Database:                  cacheInt("DATABASE", "0"),
-		KeyPrefix:                 cacheEnv("KEY_PREFIX", "hellnet:cache:"),
-		ConnectTimeout:            cacheDuration("CONNECT_TIMEOUT", "5s"),
-		ReadTimeout:               cacheDuration("SYNC_TIMEOUT", "1s"),
-		RetryCount:                cacheInt("RETRY_COUNT", "2"),
-		RetryBaseDelay:            cacheDuration("RETRY_BASE_DELAY_MS", "200ms"),
-		CircuitBreakerFailures:    cacheInt("CB_FAILURES", "5"),
-		CircuitBreakerDuration:    cacheDuration("CB_DURATION_SEC", "30s"),
-		OperationTimeout:          time.Duration(cacheInt("OPERATION_TIMEOUT_MS", "5000")) * time.Millisecond,
-		DefaultSerializer:         cacheEnv("DEFAULT_SERIALIZER", "json"),
-		EnableL1:                  cacheBool("ENABLE_L1", "true"),
-		EnableL2:                  cacheBool("ENABLE_L2", "true"),
-		DefaultTTL:                cacheDuration("DEFAULT_TTL", "30m"),
-		MaxTTL:                    cacheDuration("MAX_TTL", "24h"),
-		TouchOnRead:               cacheBool("TOUCH_ON_READ", "false"),
-		TouchTTL:                  cacheDuration("TOUCH_TTL", "10m"),
+		L1Provider:                environments.Get(cacheEnvName("L1_PROVIDER"), "memory"),
+		L1SizeLimitMB:             environments.GetInt(cacheEnvName("L1_SIZE_LIMIT_MB"), "100"),
+		L1DefaultTTL:              environments.GetDuration(cacheEnvName("L1_DEFAULT_TTL"), "5m"),
+		L1ExpirationScanFrequency: environments.GetDuration(cacheEnvName("L1_EXPIRATION_SCAN_FREQUENCY"), "1m"),
+		L1SlidingExpiration:       environments.GetBool(cacheEnvName("L1_SLIDING_EXPIRATION"), "false"),
+		Connection:                environments.Get(cacheEnvName("CONNECTION"), ""),
+		Password:                  environments.Get(cacheEnvName("PASSWORD"), ""),
+		Database:                  environments.GetInt(cacheEnvName("DATABASE"), "0"),
+		KeyPrefix:                 environments.Get(cacheEnvName("KEY_PREFIX"), "hellnet:cache:"),
+		ConnectTimeout:            environments.GetDuration(cacheEnvName("CONNECT_TIMEOUT"), "5s"),
+		ReadTimeout:               environments.GetDuration(cacheEnvName("SYNC_TIMEOUT"), "1s"),
+		RetryCount:                environments.GetInt(cacheEnvName("RETRY_COUNT"), "2"),
+		RetryBaseDelay:            environments.GetDuration(cacheEnvName("RETRY_BASE_DELAY_MS"), "200ms"),
+		CircuitBreakerFailures:    environments.GetInt(cacheEnvName("CB_FAILURES"), "5"),
+		CircuitBreakerDuration:    environments.GetDuration(cacheEnvName("CB_DURATION_SEC"), "30s"),
+		OperationTimeout:          time.Duration(environments.GetInt(cacheEnvName("OPERATION_TIMEOUT_MS"), "5000")) * time.Millisecond,
+		DefaultSerializer:         environments.Get(cacheEnvName("DEFAULT_SERIALIZER"), "json"),
+		EnableL1:                  environments.GetBool(cacheEnvName("ENABLE_L1"), "true"),
+		EnableL2:                  environments.GetBool(cacheEnvName("ENABLE_L2"), "true"),
+		DefaultTTL:                environments.GetDuration(cacheEnvName("DEFAULT_TTL"), "30m"),
+		MaxTTL:                    environments.GetDuration(cacheEnvName("MAX_TTL"), "24h"),
+		TouchOnRead:               environments.GetBool(cacheEnvName("TOUCH_ON_READ"), "false"),
+		TouchTTL:                  environments.GetDuration(cacheEnvName("TOUCH_TTL"), "10m"),
 	}
 	h, err := newWithOptions(ctx, o)
 	if err != nil {
