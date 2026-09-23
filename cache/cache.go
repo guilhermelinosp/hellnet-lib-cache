@@ -268,7 +268,7 @@ var _ Cache = (*HybridCache)(nil)
 // cacheEnv resolves a cache option from HELLNET_CACHE_<name> first, falling
 // back to HELLNET_<name> (generic), then def. Returns the env VALUE.
 func cacheEnv(name, def string) string {
-	if v := environments.Get("HELLNET_CACHE_" + name, ""); v != "" {
+	if v := environments.Get("HELLNET_CACHE_"+name, ""); v != "" {
 		return v
 	}
 	return environments.Get("HELLNET_"+name, def)
@@ -277,7 +277,7 @@ func cacheEnv(name, def string) string {
 // cacheInt reads an int option from HELLNET_CACHE_<name> with HELLNET_<name>
 // fallback.
 func cacheInt(name, def string) int {
-	if v := environments.Get("HELLNET_CACHE_" + name, ""); v != "" {
+	if v := environments.Get("HELLNET_CACHE_"+name, ""); v != "" {
 		return environments.GetInt("HELLNET_CACHE_"+name, def)
 	}
 	return environments.GetInt("HELLNET_"+name, def)
@@ -286,7 +286,7 @@ func cacheInt(name, def string) int {
 // cacheDuration reads a duration option from HELLNET_CACHE_<name> with
 // HELLNET_<name> fallback.
 func cacheDuration(name, def string) time.Duration {
-	if v := environments.Get("HELLNET_CACHE_" + name, ""); v != "" {
+	if v := environments.Get("HELLNET_CACHE_"+name, ""); v != "" {
 		return environments.GetDuration("HELLNET_CACHE_"+name, def)
 	}
 	return environments.GetDuration("HELLNET_"+name, def)
@@ -295,7 +295,7 @@ func cacheDuration(name, def string) time.Duration {
 // cacheBool reads a bool option from HELLNET_CACHE_<name> with HELLNET_<name>
 // fallback.
 func cacheBool(name, def string) bool {
-	if v := environments.Get("HELLNET_CACHE_" + name, ""); v != "" {
+	if v := environments.Get("HELLNET_CACHE_"+name, ""); v != "" {
 		return environments.GetBool("HELLNET_CACHE_"+name, def)
 	}
 	return environments.GetBool("HELLNET_"+name, def)
@@ -306,8 +306,7 @@ func cacheBool(name, def string) bool {
 // with HELLNET_* as fallback.
 // If L2 is enabled but no HELLNET_CACHE_CONNECTION is present, the library
 // automatically falls back to memory-only (L2 disabled) instead of erroring.
-func New() (*HybridCache, error) {
-	ctx := context.Background()
+func New(ctx context.Context, ops telemetry.Client) (*HybridCache, error) {
 
 	_ = environments.LoadDotEnv()
 
@@ -336,7 +335,12 @@ func New() (*HybridCache, error) {
 		TouchOnRead:               cacheBool("TOUCH_ON_READ", "false"),
 		TouchTTL:                  cacheDuration("TOUCH_TTL", "10m"),
 	}
-	return newWithOptions(ctx, o)
+	h, err := newWithOptions(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	h.ops = ops
+	return h, nil
 }
 
 // newWithOptions is the explicit construction seam used by package tests.
@@ -354,7 +358,6 @@ func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
 	// touching the caller's context lifecycle (and vice versa).
 	baseCtx, cancel := context.WithCancel(ctx)
 
-	// Telemetry client is attached by the caller via WithTelemetry after New.
 	h := &HybridCache{baseCtx: baseCtx, cancel: cancel, opts: o, logger: log.Default()}
 	if err := h.buildProviders(); err != nil {
 		cancel()
@@ -363,16 +366,9 @@ func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
 	return h, nil
 }
 
-// WithTelemetry attaches a telemetry client so Get/GetOrSet report cache_hit /
-// cache_miss counters and GetOrSet emits a cache.get_or_set OTel span.
-// Optional: a nil client keeps the library working un-instrumented.
-func (h *HybridCache) WithTelemetry(ops telemetry.Client) *HybridCache {
-	h.ops = ops
-	return h
-}
-
-// recordAccess increments cache_hit or cache_miss and, when present, runs fn
-// inside a cache.<op> OTel span.
+// recordAccess increments cache_hit or cache_miss. The operation span is
+// created by the enclosing operation so hits and misses do not create a second
+// empty span.
 func (h *HybridCache) recordAccess(op, key string, hit bool) {
 	if h.ops == nil {
 		return
@@ -384,10 +380,9 @@ func (h *HybridCache) recordAccess(op, key string, hit bool) {
 	if c, err := h.ops.Metric().Counter(name); err == nil {
 		c.Add(h.baseCtx, 1)
 	}
-	_ = h.ops.Span(h.baseCtx, "cache."+op, func(context.Context) error { return nil })
 }
 
-	// buildProviders wires L1 (memory) and/or L2 (external/redis) providers
+// buildProviders wires L1 (memory) and/or L2 (external/redis) providers
 // according to Options.
 func (h *HybridCache) buildProviders() error {
 	var providers []Provider
@@ -410,8 +405,8 @@ func (h *HybridCache) buildProviders() error {
 }
 
 // MustNew is like New but panics on error. Use at startup.
-func MustNew() *HybridCache {
-	c, err := New()
+func MustNew(ctx context.Context, ops telemetry.Client) *HybridCache {
+	c, err := New(ctx, ops)
 	if err != nil {
 		panic(err)
 	}
@@ -639,7 +634,7 @@ func (h *HybridCache) getOrSet(key string, out any, factory func(context.Context
 	}
 
 	if h.ops != nil {
-		return h.ops.Span(h.baseCtx, "cache.get_or_set", func(context.Context) error {
+		return h.ops.WithSpan("cache.get_or_set", func(context.Context) error {
 			return run()
 		})
 	}
