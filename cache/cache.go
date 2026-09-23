@@ -274,15 +274,15 @@ func New(ctx context.Context, ops telemetry.Client) (*HybridCache, error) {
 	_ = environments.LoadDotEnv()
 
 	o := Options{
-		L1Provider:                environments.Get("CACHE_L1_PROVIDER", "memory"),
+		L1Provider:                environments.GetString("", "", "CACHE_L1_PROVIDER", "memory"),
 		L1SizeLimitMB:             environments.GetInt("CACHE_L1_SIZE_LIMIT_MB", "100"),
 		L1DefaultTTL:              environments.GetDuration("CACHE_L1_DEFAULT_TTL", "5m"),
 		L1ExpirationScanFrequency: environments.GetDuration("CACHE_L1_EXPIRATION_SCAN_FREQUENCY", "1m"),
 		L1SlidingExpiration:       environments.GetBool("CACHE_L1_SLIDING_EXPIRATION", "false"),
-		Connection:                environments.Get("CACHE_CONNECTION", ""),
-		Password:                  environments.Get("CACHE_PASSWORD", ""),
+		Connection:                environments.GetString("", "", "CACHE_CONNECTION", ""),
+		Password:                  environments.GetString("", "", "CACHE_PASSWORD", ""),
 		Database:                  environments.GetInt("CACHE_DATABASE", "0"),
-		KeyPrefix:                 environments.Get("CACHE_KEY_PREFIX", "hellnet:cache:"),
+		KeyPrefix:                 environments.GetString("", "", "CACHE_KEY_PREFIX", "hellnet:cache:"),
 		ConnectTimeout:            environments.GetDuration("CACHE_CONNECT_TIMEOUT", "5s"),
 		ReadTimeout:               environments.GetDuration("CACHE_SYNC_TIMEOUT", "1s"),
 		RetryCount:                environments.GetInt("CACHE_RETRY_COUNT", "2"),
@@ -290,7 +290,7 @@ func New(ctx context.Context, ops telemetry.Client) (*HybridCache, error) {
 		CircuitBreakerFailures:    environments.GetInt("CACHE_CB_FAILURES", "5"),
 		CircuitBreakerDuration:    environments.GetDuration("CACHE_CB_DURATION_SEC", "30s"),
 		OperationTimeout:          time.Duration(environments.GetInt("CACHE_OPERATION_TIMEOUT_MS", "5000")) * time.Millisecond,
-		DefaultSerializer:         environments.Get("CACHE_DEFAULT_SERIALIZER", "json"),
+		DefaultSerializer:         environments.GetString("", "", "CACHE_DEFAULT_SERIALIZER", "json"),
 		EnableL1:                  environments.GetBool("CACHE_ENABLE_L1", "true"),
 		EnableL2:                  environments.GetBool("CACHE_ENABLE_L2", "true"),
 		DefaultTTL:                environments.GetDuration("CACHE_DEFAULT_TTL", "30m"),
