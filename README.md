@@ -156,7 +156,7 @@ func (s *OrderService) Invalidate(id string) error {
 operation and background goroutine (warming/touch). There are no `*Context`
 method variants. Each operation runs under an internally derived
 timeout bounded by `OperationTimeout` (default `5s`, env-tunable via
-`CACHE_OPERATION_TIMEOUT_MS`); L2 network calls additionally honor
+`CACHE_OPERATION_TIMEOUT`); L2 network calls additionally honor
 `ConnectTimeout`/`ReadTimeout`. Calling `Close()` aborts all in-flight
 library work.
 
@@ -318,10 +318,10 @@ L1 uses **absolute expiration** by default. Sliding is opt-in via
 | `TOUCH_TTL`                        | `00:10:00`           | Extension amount               |
 | `L1_SLIDING_EXPIRATION`            | `false`              | Sliding vs Absolute            |
 | `RETRY_COUNT`                      | `2`                  | Max retry attempts             |
-| `RETRY_BASE_DELAY_MS`              | `200`                | Base retry delay               |
+| `RETRY_BASE_DELAY`                 | `200ms`              | Base retry delay               |
 | `CB_FAILURES`                      | `5`                  | Circuit breaker threshold      |
-| `CB_DURATION_SEC`                  | `30`                 | Circuit breaker duration       |
-| `OPERATION_TIMEOUT_MS`             | `5000`               | Per-operation timeout (integer ms) |
+| `CB_DURATION`                      | `30s`                | Circuit breaker duration       |
+| `OPERATION_TIMEOUT`                | `5s`                 | Per-operation timeout              |
 | `ENABLE_L1`                        | `true`               | Enable L1                      |
 | `ENABLE_L2`                        | `true`               | Enable L2                      |
 

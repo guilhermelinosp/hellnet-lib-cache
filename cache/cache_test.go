@@ -434,7 +434,7 @@ func TestNew_DegradesToMemoryOnlyWithoutConnection(t *testing.T) {
 // The OperationTimeout knob must be bindable from env (integer milliseconds)
 // and default to 5s.
 func TestOptions_OperationTimeoutEnvBinding(t *testing.T) {
-	t.Setenv("CACHE_OPERATION_TIMEOUT_MS", "250")
+	t.Setenv("CACHE_OPERATION_TIMEOUT", "250ms")
 
 	c, err := New(context.Background(), nil)
 	if err != nil {

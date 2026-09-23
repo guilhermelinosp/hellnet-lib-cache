@@ -11,6 +11,8 @@ require (
 	golang.org/x/sync v0.22.0
 )
 
+replace github.com/guilhermelinosp/hellnet-lib-environments => /Users/guilhermelino/repositories/hellnet-lib-environments
+
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect

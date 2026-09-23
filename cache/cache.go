@@ -10,7 +10,7 @@
 //
 // Context model: the library creates and owns a base context at construction.
 // Individual operations never take a context; each one runs under an internally
-// derived timeout configured through CACHE_OPERATION_TIMEOUT_MS.
+// derived timeout configured through CACHE_OPERATION_TIMEOUT.
 package cache
 
 import (
@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,7 +89,7 @@ type Options struct {
 	// OperationTimeout bounds every cache operation issued by this library
 	// (get/set/remove/get-or-set/warm/touch/health-check). Zero or negative
 	// values fall back to defaultOperationTimeout (5s). Environment override:
-	// CACHE_OPERATION_TIMEOUT_MS (integer milliseconds).
+	// CACHE_OPERATION_TIMEOUT (Go duration, for example 5s).
 	OperationTimeout time.Duration
 
 	DefaultSerializer string
@@ -99,6 +100,42 @@ type Options struct {
 	MaxTTL      time.Duration
 	TouchOnRead bool
 	TouchTTL    time.Duration
+}
+
+func Default() Options {
+	return Options{L1Provider: "memory", L1SizeLimitMB: 100, L1DefaultTTL: 5 * time.Minute,
+		L1ExpirationScanFrequency: time.Minute, ConnectTimeout: 5 * time.Second,
+		ReadTimeout: time.Second, RetryCount: 2, RetryBaseDelay: 200 * time.Millisecond,
+		CircuitBreakerFailures: 5, CircuitBreakerDuration: 30 * time.Second,
+		OperationTimeout: 5 * time.Second, DefaultSerializer: "json", EnableL1: true,
+		EnableL2: true, DefaultTTL: 30 * time.Minute, MaxTTL: 24 * time.Hour,
+		TouchTTL: 10 * time.Minute}
+}
+
+func (o *Options) from(base Options) {
+	o.L1Provider = environments.GetString("CACHE_L1_PROVIDER", base.L1Provider)
+	o.L1SizeLimitMB = environments.GetInt("CACHE_L1_SIZE_LIMIT_MB", strconv.Itoa(base.L1SizeLimitMB))
+	o.L1DefaultTTL = environments.GetDuration("CACHE_L1_DEFAULT_TTL", base.L1DefaultTTL.String())
+	o.L1ExpirationScanFrequency = environments.GetDuration("CACHE_L1_EXPIRATION_SCAN_FREQUENCY", base.L1ExpirationScanFrequency.String())
+	o.L1SlidingExpiration = environments.GetBool("CACHE_L1_SLIDING_EXPIRATION", strconv.FormatBool(base.L1SlidingExpiration))
+	o.Connection = environments.GetString("CACHE_CONNECTION", base.Connection)
+	o.Password = environments.GetString("CACHE_PASSWORD", base.Password)
+	o.Database = environments.GetInt("CACHE_DATABASE", strconv.Itoa(base.Database))
+	o.KeyPrefix = environments.GetString("CACHE_KEY_PREFIX", base.KeyPrefix)
+	o.ConnectTimeout = environments.GetDuration("CACHE_CONNECT_TIMEOUT", base.ConnectTimeout.String())
+	o.ReadTimeout = environments.GetDuration("CACHE_SYNC_TIMEOUT", base.ReadTimeout.String())
+	o.RetryCount = environments.GetInt("CACHE_RETRY_COUNT", strconv.Itoa(base.RetryCount))
+	o.RetryBaseDelay = environments.GetDuration("CACHE_RETRY_BASE_DELAY", base.RetryBaseDelay.String())
+	o.CircuitBreakerFailures = environments.GetInt("CACHE_CB_FAILURES", strconv.Itoa(base.CircuitBreakerFailures))
+	o.CircuitBreakerDuration = environments.GetDuration("CACHE_CB_DURATION", base.CircuitBreakerDuration.String())
+	o.OperationTimeout = environments.GetDuration("CACHE_OPERATION_TIMEOUT", base.OperationTimeout.String())
+	o.DefaultSerializer = environments.GetString("CACHE_DEFAULT_SERIALIZER", base.DefaultSerializer)
+	o.EnableL1 = environments.GetBool("CACHE_ENABLE_L1", strconv.FormatBool(base.EnableL1))
+	o.EnableL2 = environments.GetBool("CACHE_ENABLE_L2", strconv.FormatBool(base.EnableL2))
+	o.DefaultTTL = environments.GetDuration("CACHE_DEFAULT_TTL", base.DefaultTTL.String())
+	o.MaxTTL = environments.GetDuration("CACHE_MAX_TTL", base.MaxTTL.String())
+	o.TouchOnRead = environments.GetBool("CACHE_TOUCH_ON_READ", strconv.FormatBool(base.TouchOnRead))
+	o.TouchTTL = environments.GetDuration("CACHE_TOUCH_TTL", base.TouchTTL.String())
 }
 
 // validate checks that required fields are set when their feature is enabled.
@@ -273,31 +310,8 @@ func New(ctx context.Context, ops telemetry.Client) (*HybridCache, error) {
 
 	_ = environments.LoadDotEnv()
 
-	o := Options{
-		L1Provider:                environments.Get("CACHE_L1_PROVIDER", "memory"),
-		L1SizeLimitMB:             environments.GetInt("CACHE_L1_SIZE_LIMIT_MB", "100"),
-		L1DefaultTTL:              environments.GetDuration("CACHE_L1_DEFAULT_TTL", "5m"),
-		L1ExpirationScanFrequency: environments.GetDuration("CACHE_L1_EXPIRATION_SCAN_FREQUENCY", "1m"),
-		L1SlidingExpiration:       environments.GetBool("CACHE_L1_SLIDING_EXPIRATION", "false"),
-		Connection:                environments.Get("CACHE_CONNECTION", ""),
-		Password:                  environments.Get("CACHE_PASSWORD", ""),
-		Database:                  environments.GetInt("CACHE_DATABASE", "0"),
-		KeyPrefix:                 environments.Get("CACHE_KEY_PREFIX", "hellnet:cache:"),
-		ConnectTimeout:            environments.GetDuration("CACHE_CONNECT_TIMEOUT", "5s"),
-		ReadTimeout:               environments.GetDuration("CACHE_SYNC_TIMEOUT", "1s"),
-		RetryCount:                environments.GetInt("CACHE_RETRY_COUNT", "2"),
-		RetryBaseDelay:            environments.GetDuration("CACHE_RETRY_BASE_DELAY_MS", "200ms"),
-		CircuitBreakerFailures:    environments.GetInt("CACHE_CB_FAILURES", "5"),
-		CircuitBreakerDuration:    environments.GetDuration("CACHE_CB_DURATION_SEC", "30s"),
-		OperationTimeout:          time.Duration(environments.GetInt("CACHE_OPERATION_TIMEOUT_MS", "5000")) * time.Millisecond,
-		DefaultSerializer:         environments.Get("CACHE_DEFAULT_SERIALIZER", "json"),
-		EnableL1:                  environments.GetBool("CACHE_ENABLE_L1", "true"),
-		EnableL2:                  environments.GetBool("CACHE_ENABLE_L2", "true"),
-		DefaultTTL:                environments.GetDuration("CACHE_DEFAULT_TTL", "30m"),
-		MaxTTL:                    environments.GetDuration("CACHE_MAX_TTL", "24h"),
-		TouchOnRead:               environments.GetBool("CACHE_TOUCH_ON_READ", "false"),
-		TouchTTL:                  environments.GetDuration("CACHE_TOUCH_TTL", "10m"),
-	}
+	o := Default()
+	o.from(o)
 	h, err := newWithOptions(ctx, o)
 	if err != nil {
 		return nil, err
@@ -457,11 +471,9 @@ func (h *HybridCache) SetBytes(key string, data []byte, ttl time.Duration) error
 	errs := make([]error, len(h.providers)) // index-disjoint writes: race-safe
 	var wg sync.WaitGroup
 	for i, p := range h.providers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			errs[i] = p.Set(key, data, actual)
-		}()
+		})
 	}
 	wg.Wait()
 
