@@ -331,7 +331,6 @@ Env vars accept Go duration syntax (`5m`, `30s`) or clock-style (`00:05:00`).
 ## Dependencies
 
 - `github.com/dgraph-io/ristretto/v2` — L1 memory provider
-- `github.com/guilhermelinosp/hellnet-lib-environments` — env binding
 - `github.com/redis/go-redis/v9` — L2 external backend
 - `github.com/sony/gobreaker` — Circuit breaker (L2 resilience)
 
