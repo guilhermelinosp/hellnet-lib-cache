@@ -18,12 +18,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/guilhermelinosp/hellnet-lib-cache/internal/env"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/guilhermelinosp/hellnet-lib-cache/internal/env"
 	"golang.org/x/sync/singleflight"
 )
 
