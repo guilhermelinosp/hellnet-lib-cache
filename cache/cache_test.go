@@ -3,12 +3,11 @@ package cache
 import (
 	"context"
 	"errors"
+	"github.com/guilhermelinosp/hellnet-lib-cache/internal/env"
 	"os"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/guilhermelinosp/hellnet-lib-environments/environments"
 )
 
 // optsL1Only returns options with only L1 enabled (no external deps).
@@ -253,17 +252,11 @@ func TestOptions_PasswordOptional(t *testing.T) {
 }
 
 func TestOptions_ClockDuration(t *testing.T) {
-	d, err := environments.ParseDuration("00:05:00")
-	if err != nil {
-		t.Fatal(err)
-	}
+	d := env.ParseDuration("00:05:00", 0)
 	if d != 5*time.Minute {
 		t.Fatalf("got %v want 5m", d)
 	}
-	d, err = environments.ParseDuration("24:00:00")
-	if err != nil {
-		t.Fatal(err)
-	}
+	d = env.ParseDuration("24:00:00", 0)
 	if d != 24*time.Hour {
 		t.Fatalf("got %v want 24h", d)
 	}
@@ -277,7 +270,7 @@ func optsL2Real(t *testing.T) Options {
 	t.Helper()
 	// Load .env if present (cwd or alongside executable) so integration tests
 	// honor a repo-level .env, not just process environment variables.
-	_ = environments.LoadDotEnv()
+	_ = env.LoadDotEnv()
 	conn := os.Getenv("HELLNET_CACHE_CONNECTION")
 	if conn == "" {
 		t.Skip("HELLNET_CACHE_CONNECTION not set; skipping L2 integration test")

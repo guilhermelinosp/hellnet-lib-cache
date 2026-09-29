@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/guilhermelinosp/hellnet-lib-environments/environments"
+	"github.com/guilhermelinosp/hellnet-lib-cache/internal/env"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -271,32 +271,32 @@ var _ Cache = (*HybridCache)(nil)
 func New() (*HybridCache, error) {
 	ctx := context.Background()
 
-	_ = environments.LoadDotEnv()
+	_ = env.LoadDotEnv()
 
 	o := Options{
-		L1Provider:                environments.GetString("HELLNET_CACHE_", "HELLNET_", "L1_PROVIDER", "memory"),
-		L1SizeLimitMB:             environments.GetInt("HELLNET_CACHE_", "HELLNET_", "L1_SIZE_LIMIT_MB", 100),
-		L1DefaultTTL:              environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "L1_DEFAULT_TTL", 5*time.Minute),
-		L1ExpirationScanFrequency: environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "L1_EXPIRATION_SCAN_FREQUENCY", time.Minute),
-		L1SlidingExpiration:       environments.GetBool("HELLNET_CACHE_", "HELLNET_", "L1_SLIDING_EXPIRATION", false),
-		Connection:                environments.GetString("HELLNET_CACHE_", "HELLNET_", "CONNECTION", ""),
-		Password:                  environments.GetString("HELLNET_CACHE_", "HELLNET_", "PASSWORD", ""),
-		Database:                  environments.GetInt("HELLNET_CACHE_", "HELLNET_", "DATABASE", 0),
-		KeyPrefix:                 environments.GetString("HELLNET_CACHE_", "HELLNET_", "KEY_PREFIX", "hellnet:cache:"),
-		ConnectTimeout:            environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "CONNECT_TIMEOUT", 5*time.Second),
-		ReadTimeout:               environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "SYNC_TIMEOUT", time.Second),
-		RetryCount:                environments.GetInt("HELLNET_CACHE_", "HELLNET_", "RETRY_COUNT", 2),
-		RetryBaseDelay:            environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "RETRY_BASE_DELAY_MS", 200*time.Millisecond),
-		CircuitBreakerFailures:    environments.GetInt("HELLNET_CACHE_", "HELLNET_", "CB_FAILURES", 5),
-		CircuitBreakerDuration:    environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "CB_DURATION_SEC", 30*time.Second),
-		OperationTimeout:          time.Duration(environments.GetInt("HELLNET_CACHE_", "HELLNET_", "OPERATION_TIMEOUT_MS", 5000)) * time.Millisecond,
-		DefaultSerializer:         environments.GetString("HELLNET_CACHE_", "HELLNET_", "DEFAULT_SERIALIZER", "json"),
-		EnableL1:                  environments.GetBool("HELLNET_CACHE_", "HELLNET_", "ENABLE_L1", true),
-		EnableL2:                  environments.GetBool("HELLNET_CACHE_", "HELLNET_", "ENABLE_L2", true),
-		DefaultTTL:                environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "DEFAULT_TTL", 30*time.Minute),
-		MaxTTL:                    environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "MAX_TTL", 24*time.Hour),
-		TouchOnRead:               environments.GetBool("HELLNET_CACHE_", "HELLNET_", "TOUCH_ON_READ", false),
-		TouchTTL:                  environments.GetDuration("HELLNET_CACHE_", "HELLNET_", "TOUCH_TTL", 10*time.Minute),
+		L1Provider:                env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_PROVIDER", "memory"),
+		L1SizeLimitMB:             env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_SIZE_LIMIT_MB", 100),
+		L1DefaultTTL:              env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_DEFAULT_TTL", 5*time.Minute),
+		L1ExpirationScanFrequency: env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_EXPIRATION_SCAN_FREQUENCY", time.Minute),
+		L1SlidingExpiration:       env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_SLIDING_EXPIRATION", false),
+		Connection:                env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CONNECTION", ""),
+		Password:                  env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "PASSWORD", ""),
+		Database:                  env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "DATABASE", 0),
+		KeyPrefix:                 env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "KEY_PREFIX", "hellnet:cache:"),
+		ConnectTimeout:            env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CONNECT_TIMEOUT", 5*time.Second),
+		ReadTimeout:               env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "SYNC_TIMEOUT", time.Second),
+		RetryCount:                env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "RETRY_COUNT", 2),
+		RetryBaseDelay:            env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "RETRY_BASE_DELAY_MS", 200*time.Millisecond),
+		CircuitBreakerFailures:    env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CB_FAILURES", 5),
+		CircuitBreakerDuration:    env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CB_DURATION_SEC", 30*time.Second),
+		OperationTimeout:          time.Duration(env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "OPERATION_TIMEOUT_MS", 5000)) * time.Millisecond,
+		DefaultSerializer:         env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "DEFAULT_SERIALIZER", "json"),
+		EnableL1:                  env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "ENABLE_L1", true),
+		EnableL2:                  env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "ENABLE_L2", true),
+		DefaultTTL:                env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "DEFAULT_TTL", 30*time.Minute),
+		MaxTTL:                    env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "MAX_TTL", 24*time.Hour),
+		TouchOnRead:               env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "TOUCH_ON_READ", false),
+		TouchTTL:                  env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "TOUCH_TTL", 10*time.Minute),
 	}
 	return newWithOptions(ctx, o)
 }
