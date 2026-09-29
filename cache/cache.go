@@ -113,15 +113,15 @@ func Default() Options {
 }
 
 func (o *Options) from(base Options) {
-	o.L1Provider = environments.GetString("CACHE_L1_PROVIDER", base.L1Provider)
+	o.L1Provider = environments.Get("CACHE_L1_PROVIDER", base.L1Provider)
 	o.L1SizeLimitMB = environments.GetInt("CACHE_L1_SIZE_LIMIT_MB", strconv.Itoa(base.L1SizeLimitMB))
 	o.L1DefaultTTL = environments.GetDuration("CACHE_L1_DEFAULT_TTL", base.L1DefaultTTL.String())
 	o.L1ExpirationScanFrequency = environments.GetDuration("CACHE_L1_EXPIRATION_SCAN_FREQUENCY", base.L1ExpirationScanFrequency.String())
 	o.L1SlidingExpiration = environments.GetBool("CACHE_L1_SLIDING_EXPIRATION", strconv.FormatBool(base.L1SlidingExpiration))
-	o.Connection = environments.GetString("CACHE_CONNECTION", base.Connection)
-	o.Password = environments.GetString("CACHE_PASSWORD", base.Password)
+	o.Connection = environments.Get("CACHE_CONNECTION", base.Connection)
+	o.Password = environments.Get("CACHE_PASSWORD", base.Password)
 	o.Database = environments.GetInt("CACHE_DATABASE", strconv.Itoa(base.Database))
-	o.KeyPrefix = environments.GetString("CACHE_KEY_PREFIX", base.KeyPrefix)
+	o.KeyPrefix = environments.Get("CACHE_KEY_PREFIX", base.KeyPrefix)
 	o.ConnectTimeout = environments.GetDuration("CACHE_CONNECT_TIMEOUT", base.ConnectTimeout.String())
 	o.ReadTimeout = environments.GetDuration("CACHE_SYNC_TIMEOUT", base.ReadTimeout.String())
 	o.RetryCount = environments.GetInt("CACHE_RETRY_COUNT", strconv.Itoa(base.RetryCount))
@@ -129,7 +129,7 @@ func (o *Options) from(base Options) {
 	o.CircuitBreakerFailures = environments.GetInt("CACHE_CB_FAILURES", strconv.Itoa(base.CircuitBreakerFailures))
 	o.CircuitBreakerDuration = environments.GetDuration("CACHE_CB_DURATION", base.CircuitBreakerDuration.String())
 	o.OperationTimeout = environments.GetDuration("CACHE_OPERATION_TIMEOUT", base.OperationTimeout.String())
-	o.DefaultSerializer = environments.GetString("CACHE_DEFAULT_SERIALIZER", base.DefaultSerializer)
+	o.DefaultSerializer = environments.Get("CACHE_DEFAULT_SERIALIZER", base.DefaultSerializer)
 	o.EnableL1 = environments.GetBool("CACHE_ENABLE_L1", strconv.FormatBool(base.EnableL1))
 	o.EnableL2 = environments.GetBool("CACHE_ENABLE_L2", strconv.FormatBool(base.EnableL2))
 	o.DefaultTTL = environments.GetDuration("CACHE_DEFAULT_TTL", base.DefaultTTL.String())
