@@ -1,5 +1,9 @@
 name: pr-check
 
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -11,19 +15,40 @@ permissions:
 
 jobs:
   lint:
-    uses: guilhermelinosp/templates/.github/workflows/shellcheck.yml@9fe39322263723d320cdce780f00d5926059798a # main
+    uses: guilhermelinosp/templates/.github/workflows/shellcheck.yml@df9f66533749a4a3a4b59c18a828a179800de096
 
   merge-check:
-    uses: guilhermelinosp/templates/.github/workflows/merge-check.yml@9fe39322263723d320cdce780f00d5926059798a # main
+    uses: guilhermelinosp/templates/.github/workflows/merge-check.yml@df9f66533749a4a3a4b59c18a828a179800de096
 
   gitleaks:
-    uses: guilhermelinosp/templates/.github/workflows/gitleaks.yml@9fe39322263723d320cdce780f00d5926059798a # main
+    uses: guilhermelinosp/templates/.github/workflows/gitleaks.yml@df9f66533749a4a3a4b59c18a828a179800de096
 
   labeler:
-    uses: guilhermelinosp/templates/.github/workflows/labeler.yml@9fe39322263723d320cdce780f00d5926059798a # main
+    uses: guilhermelinosp/templates/.github/workflows/labeler.yml@df9f66533749a4a3a4b59c18a828a179800de096
+    with:
+      app-client-id: ${{ vars.HELLNET_ACTIONS_CLIENT_ID }}
+    secrets: inherit
 
   quality:
     name: quality
-    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@9fe39322263723d320cdce780f00d5926059798a # main
+    uses: guilhermelinosp/templates/.github/workflows/lib-quality.yml@df9f66533749a4a3a4b59c18a828a179800de096
     with:
       go-version-file: go.mod
+
+  pr-gate:
+    if: always()
+    needs: [lint, merge-check, gitleaks, labeler, quality]
+    runs-on: ubuntu-latest
+    steps:
+      - name: gate
+        shell: python
+        env:
+          NEEDS: ${{ toJson(needs) }}
+        run: |
+          import json, os, sys
+          needs = json.loads(os.environ['NEEDS'])
+          failed = [k for k, v in needs.items() if v.get('result') not in ('success', 'skipped')]
+          if failed:
+              print('BLOCKED-BY:', failed)
+              sys.exit(1)
+          print('ALL-GREEN')

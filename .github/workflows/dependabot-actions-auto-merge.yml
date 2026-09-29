@@ -1,0 +1,14 @@
+name: dependabot-actions-auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]' && startsWith(github.event.pull_request.head.ref, 'dependabot/')
+    uses: guilhermelinosp/templates/.github/workflows/dependabot-auto-merge.yml@df9f66533749a4a3a4b59c18a828a179800de096
