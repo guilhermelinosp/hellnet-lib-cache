@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -216,7 +215,7 @@ func (h *HybridCache) Allow(key string, limit int64, window time.Duration) (allo
 	if s := h.scriptProvider(); s != nil {
 		count, ttlLeft, serr := s.AllowN(fullKey, 1, window)
 		if serr != nil {
-			log.Printf("[hellnet-cache] rate-limit backend error for %s: %v — degrading to process-local window", key, serr)
+			h.obs.logger.Warn(h.baseCtx, "cache rate-limit backend degraded", "error", serr)
 		} else {
 			allowed, remaining, resetIn = h.allowDecision(count, ttlLeft, limit)
 			return allowed, remaining, resetIn, nil

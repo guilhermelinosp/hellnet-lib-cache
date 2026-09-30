@@ -41,7 +41,7 @@ Cache é a **geladeira da casa**. O banco de dados é o **mercado**:
 ### Primeiras linhas
 
 ```go
-c, err := cache.New() // carrega HELLNET_CACHE_* sozinho
+c, err := cache.New() // carrega .env e HELLNET_CACHE_* sozinho
 
 var menu map[string]string
 err = c.GetOrSet("menu-de-hoje", &menu, func(ctx context.Context) (any, error) {
@@ -51,8 +51,9 @@ err = c.GetOrSet("menu-de-hoje", &menu, func(ctx context.Context) (any, error) {
 
 Linha por linha:
 
-1. `cache.New()` — monta a geladeira (L1) e a despensa (L2), cria seu contexto
-   interno e lê as variáveis de ambiente; nenhuma operação recebe contexto.
+1. `cache.New()` — monta a geladeira (L1) e a despensa (L2), cria um contexto
+   interno e lê as variáveis de ambiente. Para propagar o contexto de uma
+   requisição, use a variante `*Context`, como `GetContext`.
 2. A biblioteca lê `HELLNET_CACHE_*`, com fallback para `HELLNET_*`.
    Toda operação roda com timeout interno
    (`Options.OperationTimeout`, padrão `5s`).
@@ -92,7 +93,7 @@ import (
 )
 
 func main() {
-	// New() owns its context, loads .env, and resolves HELLNET_CACHE_* before deciding L1/L2.
+	// New() loads .env and resolves HELLNET_CACHE_* before deciding L1/L2.
 	c, err := cache.New()
 	if err != nil {
 		log.Fatal(err)
@@ -104,9 +105,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Get
+	// Get with the caller context propagated to tracing and L2 I/O.
 	var o Order
-	_ = c.Get("order:1", &o)
+	_ = c.GetContext(context.Background(), "order:1", &o)
 
 	// GetOrSet — stampede-protected
 	var cfg Config
@@ -152,13 +153,14 @@ func (s *OrderService) Invalidate(id string) error {
 
 ### Context & timeouts
 
-`New`/`MustNew` create and own the context propagated internally to every
-operation and background goroutine (warming/touch). There are no `*Context`
-method variants. Each operation runs under an internally derived
-timeout bounded by `OperationTimeout` (default `5s`, env-tunable via
+`New`/`MustNew` create a library-owned base context for compatibility methods
+such as `Get`, `Set`, and background work (warming/touch). Context-aware
+variants — `GetContext`, `SetContext`, `SetBytesContext`, `RemoveContext`,
+`ExistsContext`, `GetOrSetContext`, and `HealthCheck` — propagate the caller's
+context to tracing and L2 I/O. Each operation is bounded by
+`OperationTimeout` (default `5s`, env-tunable via
 `HELLNET_CACHE_OPERATION_TIMEOUT_MS`); L2 network calls additionally honor
-`ConnectTimeout`/`ReadTimeout`. Calling `Close()` aborts all in-flight
-library work.
+`ConnectTimeout`/`ReadTimeout`. Calling `Close()` aborts library-owned work.
 
 ```go
 c, err := cache.New()
@@ -219,7 +221,8 @@ hard.
 
 ## Distributed locks
 
-TTL-based mutual exclusion, context-free like every operation. Ownership is
+TTL-based mutual exclusion. `Lock` does not accept a caller context; its
+backend calls use the library-owned context and operation timeout. Ownership is
 token-checked: releases never delete somebody else's lease and a second release
 errors (`ErrLockNotHeld`):
 
@@ -343,6 +346,23 @@ For dependency injection, use `NewWithOptions` with `WithOptions`, `WithProvider
 
 Test-only dependencies: `github.com/alicebob/miniredis/v2` provides hermetic
 Redis behavior tests, and `go.uber.org/goleak` checks for leaked goroutines.
+
+## Observabilidade
+
+Passe `*telemetry.Telemetry` via `WithInstrumentation`:
+
+```go
+cache, err := cache.NewWithOptions(ctx,
+    cache.WithOptions(options),
+    cache.WithInstrumentation(tel),
+)
+```
+
+Spans ctx-first: `cache.get`, `cache.set`, `cache.remove`, `cache.exists`,
+`cache.get_or_set` e `cache.health`. Métricas: `hellnet.cache.operations` e
+`hellnet.cache.operation.duration` (`s`), com `operation` e `result`.
+`HealthCheck(ctx)` é para `/health`; cache degradada não deve, por si só,
+determinar `/ready`.
 
 ## License
 

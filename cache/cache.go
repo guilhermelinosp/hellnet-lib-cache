@@ -18,13 +18,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/guilhermelinosp/hellnet-lib-cache/internal/env"
+	"github.com/guilhermelinosp/hellnet-lib-telemetry/instrument"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -44,6 +47,15 @@ type Provider interface {
 	Exists(key string) (bool, error)
 	HealthCheck() bool
 	Close() error
+}
+
+// contextProvider is an optional extension. Provider keeps its original
+// public shape while ctx-first cache calls can pass the request context to I/O.
+type contextProvider interface {
+	GetContext(context.Context, string) ([]byte, error)
+	SetContext(context.Context, string, []byte, time.Duration) error
+	RemoveContext(context.Context, string) error
+	ExistsContext(context.Context, string) (bool, error)
 }
 
 // Serializer marshals/unmarshals cache values.
@@ -154,6 +166,7 @@ func (o Options) resolveTTL(ttl time.Duration) time.Duration {
 }
 
 // Metrics tracks hits, misses, sets and removes per layer. Safe for concurrent use.
+// Deprecated: use the OpenTelemetry metrics emitted through WithInstrumentation.
 type Metrics struct {
 	layerName string
 
@@ -254,12 +267,12 @@ func (s *JSONSerializer) Deserialize(data []byte, out any) error {
 //   - touch-on-read: optionally extends TTL on hit in upper layers
 //   - all layer writes are parallel (goroutines + WaitGroup)
 type HybridCache struct {
-	baseCtx    context.Context
+	baseCtx    context.Context //nolint:containedctx // TODO(telemetry-fase-D): legacy wrapper retains construction context.
 	cancel     context.CancelFunc
 	opts       Options
 	serializer Serializer
 	providers  []Provider
-	logger     *log.Logger
+	obs        observability
 	now        func() time.Time
 
 	flight  singleflight.Group // GetOrSet stampede protection, keyed by cache key
@@ -339,18 +352,27 @@ func optionsFromEnv() (Options, error) {
 
 // newWithOptions is the explicit construction seam used by package tests.
 func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
-	return newWithDependencies(ctx, o, nil, nil, false)
+	return newWithDependencies(ctx, o, nil, nil, false, nil)
 }
 
 // Option configures NewWithOptions without changing the existing constructors.
 type Option func(*constructorOptions) error
 
 type constructorOptions struct {
-	options        Options
-	hasOptions     bool
-	providers      []Provider
-	customProvider bool
-	serializer     Serializer
+	options         Options
+	hasOptions      bool
+	providers       []Provider
+	customProvider  bool
+	serializer      Serializer
+	instrumentation instrument.Instrumentation
+}
+
+// WithInstrumentation supplies the Hellnet observability contract.
+func WithInstrumentation(inst instrument.Instrumentation) Option {
+	return func(config *constructorOptions) error {
+		config.instrumentation = inst
+		return nil
+	}
 }
 
 // WithOptions supplies explicit cache configuration.
@@ -401,15 +423,15 @@ func NewWithOptions(ctx context.Context, options ...Option) (*HybridCache, error
 			return nil, err
 		}
 	}
-	return newWithDependencies(ctx, config.options, config.providers, config.serializer, config.customProvider)
+	return newWithDependencies(ctx, config.options, config.providers, config.serializer, config.customProvider, config.instrumentation)
 }
 
-func newWithDependencies(ctx context.Context, o Options, supplied []Provider, serializer Serializer, customProviders bool) (*HybridCache, error) {
+func newWithDependencies(ctx context.Context, o Options, supplied []Provider, serializer Serializer, customProviders bool, inst instrument.Instrumentation) (*HybridCache, error) {
 	if o.EnableL2 && o.Connection == "" {
 		if o.l2Explicit {
 			return nil, fmt.Errorf("cache: L2 explicitly enabled but HELLNET_CACHE_CONNECTION is not configured")
 		}
-		warnL2DegradedOnce()
+		warnL2DegradedOnce(inst) //nolint:contextcheck // constructor warning has no caller context.
 		o.EnableL2 = false
 	}
 
@@ -435,7 +457,7 @@ func newWithDependencies(ctx context.Context, o Options, supplied []Provider, se
 		}
 
 		if o.EnableL2 {
-			providers = append(providers, NewExternalProvider(baseCtx, o))
+			providers = append(providers, newExternalProvider(baseCtx, o, inst))
 		}
 	}
 	if serializer == nil {
@@ -448,16 +470,19 @@ func newWithDependencies(ctx context.Context, o Options, supplied []Provider, se
 		opts:       o,
 		serializer: serializer,
 		providers:  providers,
-		logger:     log.Default(),
+		obs:        newObservability(inst), //nolint:contextcheck // constructor initializes providers, not request work.
 		now:        time.Now,
 	}, nil
 }
 
 var l2DegradedWarning sync.Once
 
-func warnL2DegradedOnce() {
+func warnL2DegradedOnce(inst instrument.Instrumentation) {
 	l2DegradedWarning.Do(func() {
-		log.Printf("[hellnet-cache] HELLNET_CACHE_CONNECTION not set; running with L2 disabled")
+		if inst == nil {
+			inst = instrument.Noop()
+		}
+		inst.Logger(instrumentationScope).Warn(context.TODO(), "cache L2 disabled: connection not configured")
 	})
 }
 
@@ -484,11 +509,15 @@ func mustNewWithOptions(ctx context.Context, o Options) *HybridCache {
 // Backend I/O is additionally bounded by each provider's internal timeout
 // context. Callers must invoke the returned CancelFunc.
 func (h *HybridCache) opCtx() (context.Context, context.CancelFunc) {
+	return h.opCtxFrom(h.baseCtx)
+}
+
+func (h *HybridCache) opCtxFrom(parent context.Context) (context.Context, context.CancelFunc) {
 	t := h.opts.OperationTimeout
 	if t <= 0 {
 		t = defaultOperationTimeout
 	}
-	return context.WithTimeout(h.baseCtx, t)
+	return context.WithTimeout(ctxOrBackground(parent), t)
 }
 
 func (h *HybridCache) nowTime() time.Time {
@@ -501,7 +530,30 @@ func (h *HybridCache) nowTime() time.Time {
 // Get retrieves a value by key under the internal operation context. Returns
 // the zero value if not found in any layer.
 func (h *HybridCache) Get(key string, out any) error {
-	data, foundAtIndex := h.getRaw(key)
+	return h.GetContext(h.baseCtx, key, out)
+}
+
+// GetContext retrieves a value using the caller's context as span and I/O parent.
+func (h *HybridCache) GetContext(ctx context.Context, key string, out any) (err error) {
+	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.get", trace.WithAttributes(attribute.String("hellnet.cache.operation", "get")))
+	defer span.End()
+	started := time.Now()
+	result := "miss"
+	defer func() {
+		if err != nil {
+			result = "error"
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		h.obs.observe(ctx, "get", result, started)
+	}()
+	data, foundAtIndex := h.getRawContext(ctx, key)
+	hit := foundAtIndex >= 0 && data != nil
+	span.SetAttributes(attribute.Bool("hellnet.cache.hit", hit))
+	if hit {
+		result = "hit"
+		span.SetAttributes(attribute.String("hellnet.cache.layer", h.providers[foundAtIndex].Name()))
+	}
 	if foundAtIndex < 0 || data == nil {
 		return nil // not found; out stays zero value
 	}
@@ -512,8 +564,12 @@ func (h *HybridCache) Get(key string, out any) error {
 // triggering warming/touch side-effects. Each provider bounds its own I/O via
 // its internal operation context.
 func (h *HybridCache) getRaw(key string) (data []byte, foundAtIndex int) {
+	return h.getRawContext(h.baseCtx, key)
+}
+
+func (h *HybridCache) getRawContext(ctx context.Context, key string) (data []byte, foundAtIndex int) {
 	for i, p := range h.providers {
-		v, err := p.Get(key)
+		v, err := providerGet(ctx, p, key)
 		if err != nil {
 			continue
 		}
@@ -522,7 +578,7 @@ func (h *HybridCache) getRaw(key string) (data []byte, foundAtIndex int) {
 				h.touch(key, v)
 			}
 			if i > 0 {
-				h.warm(key, v, i)
+				h.warm(key, v, i) //nolint:contextcheck // legacy background warming receives no caller ownership.
 			}
 			return v, i
 		}
@@ -533,11 +589,28 @@ func (h *HybridCache) getRaw(key string) (data []byte, foundAtIndex int) {
 // Set stores a value with optional TTL, written to all enabled layers under
 // the internal operation context. A ttl of 0 uses the layer's default.
 func (h *HybridCache) Set(key string, value any, ttl time.Duration) error {
+	return h.SetContext(h.baseCtx, key, value, ttl)
+}
+
+// SetContext stores a value using the caller's context as span and I/O parent.
+func (h *HybridCache) SetContext(ctx context.Context, key string, value any, ttl time.Duration) (err error) {
+	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.set", trace.WithAttributes(attribute.String("hellnet.cache.operation", "set")))
+	defer span.End()
+	started := time.Now()
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "error"
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		h.obs.observe(ctx, "set", result, started)
+	}()
 	data, err := h.serializer.Serialize(value)
 	if err != nil {
 		return err
 	}
-	return h.SetBytes(key, data, ttl)
+	return h.setBytesContext(ctx, key, data, ttl)
 }
 
 // SetBytes writes pre-serialized bytes to all enabled layers in parallel under
@@ -552,6 +625,27 @@ func (h *HybridCache) Set(key string, value any, ttl time.Duration) error {
 // react to a total write failure. Per-provider failures are aggregated with
 // errors.Join and prefixed with the failing layer's name.
 func (h *HybridCache) SetBytes(key string, data []byte, ttl time.Duration) error {
+	return h.setBytesContext(h.baseCtx, key, data, ttl)
+}
+
+// SetBytesContext writes serialized data using the caller's context.
+func (h *HybridCache) SetBytesContext(ctx context.Context, key string, data []byte, ttl time.Duration) (err error) {
+	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.set", trace.WithAttributes(attribute.String("hellnet.cache.operation", "set")))
+	defer span.End()
+	started := time.Now()
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "error"
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		h.obs.observe(ctx, "set", result, started)
+	}()
+	return h.setBytesContext(ctx, key, data, ttl)
+}
+
+func (h *HybridCache) setBytesContext(ctx context.Context, key string, data []byte, ttl time.Duration) error {
 	actual := h.opts.resolveTTL(ttl)
 
 	errs := make([]error, len(h.providers)) // index-disjoint writes: race-safe
@@ -560,7 +654,7 @@ func (h *HybridCache) SetBytes(key string, data []byte, ttl time.Duration) error
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs[i] = p.Set(key, data, actual)
+			errs[i] = providerSet(ctx, p, key, data, actual)
 		}()
 	}
 	wg.Wait()
@@ -570,7 +664,7 @@ func (h *HybridCache) SetBytes(key string, data []byte, ttl time.Duration) error
 		if err == nil {
 			continue
 		}
-		h.logger.Printf("[hellnet-cache] set failed on %s for key %s: %v", h.providers[i].Name(), key, err)
+		h.obs.logger.Warn(ctx, "cache set failed", "layer", h.providers[i].Name(), "error", err)
 		failures = append(failures, fmt.Errorf("%s: %w", h.providers[i].Name(), err))
 	}
 	switch len(failures) {
@@ -581,8 +675,7 @@ func (h *HybridCache) SetBytes(key string, data []byte, ttl time.Duration) error
 		return errors.Join(failures...)
 	default:
 		// Degraded-but-successful: some layer still holds the value.
-		h.logger.Printf("[hellnet-cache] set degraded for key %s (some layers failed): %v",
-			key, errors.Join(failures...))
+		h.obs.logger.Warn(ctx, "cache set degraded", "error", errors.Join(failures...))
 		return nil
 	}
 }
@@ -590,13 +683,22 @@ func (h *HybridCache) SetBytes(key string, data []byte, ttl time.Duration) error
 // Remove deletes a key from all layers under each provider's internal
 // operation context.
 func (h *HybridCache) Remove(key string) error {
+	return h.RemoveContext(h.baseCtx, key)
+}
+
+// RemoveContext removes a value using the caller's context.
+func (h *HybridCache) RemoveContext(ctx context.Context, key string) error {
+	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.remove", trace.WithAttributes(attribute.String("hellnet.cache.operation", "remove")))
+	defer span.End()
+	started := time.Now()
+	defer func() { h.obs.observe(ctx, "remove", "success", started) }()
 	var wg sync.WaitGroup
 	for _, p := range h.providers {
 		wg.Add(1)
 		go func(pr Provider) {
 			defer wg.Done()
-			if err := pr.Remove(key); err != nil {
-				h.logger.Printf("[hellnet-cache] remove failed on %s for key %s: %v", pr.Name(), key, err)
+			if err := providerRemove(ctx, pr, key); err != nil {
+				h.obs.logger.Warn(ctx, "cache remove failed", "layer", pr.Name(), "error", err)
 			}
 		}(p)
 	}
@@ -607,8 +709,17 @@ func (h *HybridCache) Remove(key string) error {
 // Exists reports whether a key exists in any layer under each provider's
 // internal operation context.
 func (h *HybridCache) Exists(key string) (bool, error) {
+	return h.ExistsContext(h.baseCtx, key)
+}
+
+// ExistsContext checks presence using the caller's context.
+func (h *HybridCache) ExistsContext(ctx context.Context, key string) (bool, error) {
+	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.exists", trace.WithAttributes(attribute.String("hellnet.cache.operation", "exists")))
+	defer span.End()
+	started := time.Now()
+	defer func() { h.obs.observe(ctx, "exists", "success", started) }()
 	for _, p := range h.providers {
-		ok, err := p.Exists(key)
+		ok, err := providerExists(ctx, p, key)
 		if err != nil {
 			continue
 		}
@@ -617,6 +728,37 @@ func (h *HybridCache) Exists(key string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func ctxOrBackground(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+func providerGet(ctx context.Context, p Provider, key string) ([]byte, error) {
+	if cp, ok := p.(contextProvider); ok {
+		return cp.GetContext(ctx, key)
+	}
+	return p.Get(key)
+}
+func providerSet(ctx context.Context, p Provider, key string, value []byte, ttl time.Duration) error {
+	if cp, ok := p.(contextProvider); ok {
+		return cp.SetContext(ctx, key, value, ttl)
+	}
+	return p.Set(key, value, ttl)
+}
+func providerRemove(ctx context.Context, p Provider, key string) error {
+	if cp, ok := p.(contextProvider); ok {
+		return cp.RemoveContext(ctx, key)
+	}
+	return p.Remove(key)
+}
+func providerExists(ctx context.Context, p Provider, key string) (bool, error) {
+	if cp, ok := p.(contextProvider); ok {
+		return cp.ExistsContext(ctx, key)
+	}
+	return p.Exists(key)
 }
 
 // Healthy aggregates the health of every wired provider: it returns nil when
@@ -634,6 +776,24 @@ func (h *HybridCache) Healthy() error {
 	return errors.Join(errs...)
 }
 
+// HealthCheck reports provider health for registration in a service /health
+// endpoint. It intentionally does not represent readiness: cache can degrade
+// to L1 or a caller-selected fallback.
+func (h *HybridCache) HealthCheck(ctx context.Context) error {
+	started := time.Now()
+	_, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.health", trace.WithAttributes(attribute.String("hellnet.cache.operation", "health")))
+	defer span.End()
+	err := h.Healthy()
+	result := "success"
+	if err != nil {
+		result = "error"
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	h.obs.observe(ctxOrBackground(ctx), "health", result, started)
+	return err
+}
+
 // GetOrSet retrieves a value or, if missing, runs the factory and caches the
 // result. Stampede-protected per key: concurrent callers for the same key are
 // coalesced into a single factory execution and every waiter receives the
@@ -645,24 +805,46 @@ func (h *HybridCache) Healthy() error {
 // cancellation. When calls are coalesced, the shared execution runs under the
 // operation context of the caller that won the execution slot.
 func (h *HybridCache) GetOrSet(key string, out any, factory func(context.Context) (any, error), ttl time.Duration) error {
-	ctx, cancel := h.opCtx()
+	return h.GetOrSetContext(h.baseCtx, key, out, factory, ttl)
+}
+
+// GetOrSetContext retrieves or computes a value using the caller's context.
+// Coalesced execution is detached from caller cancellation but retains trace
+// values and is bounded by OperationTimeout.
+func (h *HybridCache) GetOrSetContext(parent context.Context, key string, out any, factory func(context.Context) (any, error), ttl time.Duration) (err error) {
+	ctx, span := h.obs.tracer.Start(ctxOrBackground(parent), "cache.get_or_set", trace.WithAttributes(attribute.String("hellnet.cache.operation", "get_or_set")))
+	defer span.End()
+	started := time.Now()
+	resultName := "miss"
+	defer func() {
+		if err != nil {
+			resultName = "error"
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		h.obs.observe(ctx, "get_or_set", resultName, started)
+	}()
+	ctx, cancel := h.opCtxFrom(ctx)
 	defer cancel()
 
 	// fast path: serve hits without contending on the flight group.
-	if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
+	if data, foundAtIndex := h.getRawContext(ctx, key); foundAtIndex >= 0 && data != nil {
+		resultName = "hit"
 		return h.serializer.Deserialize(data, out)
 	}
 
 	type flightResult struct{ data []byte }
 
-	res, err, _ := h.flight.Do(key, func() (any, error) {
+	resultCh := h.flight.DoChan(key, func() (any, error) {
+		sharedCtx, sharedCancel := h.opCtxFrom(context.WithoutCancel(ctx))
+		defer sharedCancel()
 		// double-check after winning the execution slot: another call may
 		// have populated the entry between our fast path and acquiring the key.
-		if data, foundAtIndex := h.getRaw(key); foundAtIndex >= 0 && data != nil {
+		if data, foundAtIndex := h.getRawContext(sharedCtx, key); foundAtIndex >= 0 && data != nil {
 			return flightResult{data: data}, nil
 		}
 
-		value, ferr := factory(ctx)
+		value, ferr := factory(sharedCtx)
 		if ferr != nil {
 			return nil, ferr
 		}
@@ -672,11 +854,18 @@ func (h *HybridCache) GetOrSet(key string, out any, factory func(context.Context
 		if serr != nil {
 			return nil, serr
 		}
-		if serr := h.SetBytes(key, data, ttl); serr != nil {
+		if serr := h.setBytesContext(sharedCtx, key, data, ttl); serr != nil {
 			return nil, serr
 		}
 		return flightResult{data: data}, nil
 	})
+	var result singleflight.Result
+	select {
+	case result = <-resultCh:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	res, err := result.Val, result.Err
 	if err != nil {
 		return err
 	}
@@ -727,7 +916,7 @@ func (h *HybridCache) warm(key string, data []byte, foundAtIndex int) {
 				return
 			}
 			if err := h.providers[i].Set(key, data, ttl); err != nil {
-				h.logger.Printf("[hellnet-cache] warming failed for key %s: %v", key, err)
+				h.obs.logger.Warn(ctx, "cache warming failed", "error", err)
 			}
 		}
 	}()

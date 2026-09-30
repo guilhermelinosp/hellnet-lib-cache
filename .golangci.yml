@@ -18,6 +18,11 @@ linters:
     - nakedret
     - bodyclose
     - noctx
+    - contextcheck
+    - containedctx
+    - fatcontext
+    - depguard
+    - forbidigo
     - gosec
   settings:
     gocyclo:
@@ -26,10 +31,38 @@ linters:
       rules:
         - name: exported
           severity: warning
+    depguard:
+      rules:
+        production:
+          files:
+            - '$all'
+            - '!**/*_test.go'
+          deny:
+            - pkg: github.com/prometheus/client_golang
+              desc: use the telemetry contract
+            - pkg: log
+              desc: use the telemetry contract logger
+            - pkg: go.opentelemetry.io/otel/sdk
+              desc: SDK is test-harness-only
+            - pkg: github.com/guilhermelinosp/hellnet-lib-telemetry/telemetrytest
+              desc: deprecated test package; use internal/obstest
+    forbidigo:
+      forbid:
+        - pattern: 'slog.Debug'
+        - pattern: 'slog.Info'
+        - pattern: 'slog.Warn'
+        - pattern: 'slog.Error'
+        - pattern: 'slog.Default'
+        - pattern: 'otel.Tracer'
+        - pattern: 'otel.Meter'
+        - pattern: 'otel.GetMeterProvider'
+        - pattern: 'otel.GetTracerProvider'
+        - pattern: 'otel.GetTextMapPropagator'
   exclusions:
     paths:
       - "_test\\.go$"
       - "^_examples/"
+      - "internal/obstest/"
 
 formatters:
   enable:
