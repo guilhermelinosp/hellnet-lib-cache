@@ -155,6 +155,15 @@ func matchingData(data metricdata.Aggregation, want *attribute.Set) metricdata.A
 		}
 		d.DataPoints = p
 		return d
+	case metricdata.Histogram[float64]:
+		var p []metricdata.HistogramDataPoint[float64]
+		for _, x := range d.DataPoints {
+			if x.Attributes.Equals(want) {
+				p = append(p, x)
+			}
+		}
+		d.DataPoints = p
+		return d
 	}
 	return data
 }
@@ -174,11 +183,17 @@ func (h *Harness) HistogramCount(ctx context.Context, name string, attrs ...attr
 	if !ok {
 		return 0, false
 	}
-	d, ok := m.Data.(metricdata.Histogram[int64])
-	if !ok || len(d.DataPoints) != 1 {
-		return 0, false
+	switch d := m.Data.(type) {
+	case metricdata.Histogram[int64]:
+		if len(d.DataPoints) == 1 {
+			return d.DataPoints[0].Count, true
+		}
+	case metricdata.Histogram[float64]:
+		if len(d.DataPoints) == 1 {
+			return d.DataPoints[0].Count, true
+		}
 	}
-	return d.DataPoints[0].Count, true
+	return 0, false
 }
 func (h *Harness) GaugeValue(ctx context.Context, name string, attrs ...attribute.KeyValue) (float64, bool) {
 	m, ok := h.metric(name, ctx, attrs...)

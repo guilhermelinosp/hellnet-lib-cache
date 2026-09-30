@@ -63,16 +63,6 @@ linters:
       - "_test\\.go$"
       - "^_examples/"
       - "internal/obstest/"
-    rules:
-      # TODO(telemetry-fase-D): remove after context-first cache paths land.
-      - path: "cache/cache.go"
-        linters: [containedctx, depguard]
-      # TODO(telemetry-fase-D): remove after external provider receives caller context.
-      - path: "cache/instrumentation.go"
-        linters: [containedctx, contextcheck, depguard]
-      # TODO(telemetry-fase-E): remove after coordination logs use instrument.Logger.
-      - path: "cache/coordination.go"
-        linters: [depguard]
 
 formatters:
   enable:
