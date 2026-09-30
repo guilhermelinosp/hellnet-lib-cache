@@ -285,7 +285,7 @@ var _ Cache = (*HybridCache)(nil)
 func New() (*HybridCache, error) {
 	ctx := context.Background()
 
-	_ = env.LoadDotEnv()
+	_ = env.Environment()
 	o, err := optionsFromEnv()
 	if err != nil {
 		return nil, err
@@ -297,38 +297,38 @@ func optionsFromEnv() (Options, error) {
 	prefixes := []string{"HELLNET_CACHE_", "HELLNET_"}
 	var readErr error
 	readDuration := func(key string, fallback time.Duration) time.Duration {
-		value, err := env.DurationPrefixedE(prefixes, key, fallback)
+		value, err := cacheDurationEnv(prefixes, key, fallback)
 		if err != nil && readErr == nil {
 			readErr = err
 		}
 		return value
 	}
 	o := Options{
-		L1Provider:                env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_PROVIDER", "memory"),
-		L1SizeLimitMB:             env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_SIZE_LIMIT_MB", 100),
+		L1Provider:                cacheEnv(prefixes, "L1_PROVIDER", "memory"),
+		L1SizeLimitMB:             cacheIntEnv(prefixes, "L1_SIZE_LIMIT_MB", 100),
 		L1DefaultTTL:              readDuration("L1_DEFAULT_TTL", 5*time.Minute),
 		L1ExpirationScanFrequency: readDuration("L1_EXPIRATION_SCAN_FREQUENCY", time.Minute),
-		L1SlidingExpiration:       env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_SLIDING_EXPIRATION", false),
-		Connection:                env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CONNECTION", ""),
-		Password:                  env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "PASSWORD", ""),
-		Database:                  env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "DATABASE", 0),
-		KeyPrefix:                 env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "KEY_PREFIX", "hellnet:cache:"),
+		L1SlidingExpiration:       cacheBoolEnv(prefixes, "L1_SLIDING_EXPIRATION", false),
+		Connection:                cacheEnv(prefixes, "CONNECTION", ""),
+		Password:                  cacheEnv(prefixes, "PASSWORD", ""),
+		Database:                  cacheIntEnv(prefixes, "DATABASE", 0),
+		KeyPrefix:                 cacheEnv(prefixes, "KEY_PREFIX", "hellnet:cache:"),
 		ConnectTimeout:            readDuration("CONNECT_TIMEOUT", 5*time.Second),
 		ReadTimeout:               readDuration("SYNC_TIMEOUT", time.Second),
-		RetryCount:                env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "RETRY_COUNT", 2),
+		RetryCount:                cacheIntEnv(prefixes, "RETRY_COUNT", 2),
 		RetryBaseDelay:            readDuration("RETRY_BASE_DELAY_MS", 200*time.Millisecond),
-		CircuitBreakerFailures:    env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CB_FAILURES", 5),
+		CircuitBreakerFailures:    cacheIntEnv(prefixes, "CB_FAILURES", 5),
 		CircuitBreakerDuration:    readDuration("CB_DURATION_SEC", 30*time.Second),
 		OperationTimeout:          readDuration("OPERATION_TIMEOUT_MS", 5*time.Second),
-		DefaultSerializer:         env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "DEFAULT_SERIALIZER", "json"),
-		EnableL1:                  env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "ENABLE_L1", true),
-		EnableL2:                  env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "ENABLE_L2", true),
+		DefaultSerializer:         cacheEnv(prefixes, "DEFAULT_SERIALIZER", "json"),
+		EnableL1:                  cacheBoolEnv(prefixes, "ENABLE_L1", true),
+		EnableL2:                  cacheBoolEnv(prefixes, "ENABLE_L2", true),
 		DefaultTTL:                readDuration("DEFAULT_TTL", 30*time.Minute),
 		MaxTTL:                    readDuration("MAX_TTL", 24*time.Hour),
-		TouchOnRead:               env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "TOUCH_ON_READ", false),
+		TouchOnRead:               cacheBoolEnv(prefixes, "TOUCH_ON_READ", false),
 		TouchTTL:                  readDuration("TOUCH_TTL", 10*time.Minute),
 	}
-	if raw, ok := env.LookupPrefixed(prefixes, "ENABLE_L2"); ok && strings.EqualFold(strings.TrimSpace(raw), "true") {
+	if raw, ok := cacheLookupEnv(prefixes, "ENABLE_L2"); ok && strings.EqualFold(strings.TrimSpace(raw), "true") {
 		o.l2Explicit = true
 	}
 	if readErr != nil {

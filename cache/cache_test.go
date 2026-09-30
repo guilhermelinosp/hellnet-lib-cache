@@ -252,11 +252,17 @@ func TestOptions_PasswordOptional(t *testing.T) {
 }
 
 func TestOptions_ClockDuration(t *testing.T) {
-	d := env.ParseDuration("00:05:00", 0)
+	d, err := parseCacheDuration("00:05:00", time.Nanosecond, false)
+	if err != nil {
+		t.Fatalf("parse duration: %v", err)
+	}
 	if d != 5*time.Minute {
 		t.Fatalf("got %v want 5m", d)
 	}
-	d = env.ParseDuration("24:00:00", 0)
+	d, err = parseCacheDuration("24:00:00", time.Nanosecond, false)
+	if err != nil {
+		t.Fatalf("parse duration: %v", err)
+	}
 	if d != 24*time.Hour {
 		t.Fatalf("got %v want 24h", d)
 	}
@@ -270,7 +276,7 @@ func optsL2Real(t *testing.T) Options {
 	t.Helper()
 	// Load .env if present (cwd or alongside executable) so integration tests
 	// honor a repo-level .env, not just process environment variables.
-	_ = env.LoadDotEnv()
+	_ = env.Environment()
 	conn := os.Getenv("HELLNET_CACHE_CONNECTION")
 	if conn == "" {
 		t.Skip("HELLNET_CACHE_CONNECTION not set; skipping L2 integration test")

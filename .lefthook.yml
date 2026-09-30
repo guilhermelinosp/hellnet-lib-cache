@@ -1,7 +1,7 @@
 output: false
 
 pre-commit:
-  parallel: true
+  parallel: false
   commands:
     fmt:
       glob: "*.go"
@@ -10,7 +10,7 @@ pre-commit:
       glob: "*.go"
       run: go vet ./...
     tidy:
-      run: go mod tidy
+      run: go mod tidy && git diff --exit-code -- go.mod go.sum
     lint:
       run: |
         if command -v golangci-lint >/dev/null 2>&1; then
@@ -29,6 +29,8 @@ pre-commit:
 
 pre-push:
   commands:
+    tidy:
+      run: go mod tidy && git diff --exit-code -- go.mod go.sum
     test:
       run: go test -count=1 -race ./...
 
