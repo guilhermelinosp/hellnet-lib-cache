@@ -45,6 +45,17 @@ func Prefixed(prefixes []string, key, fallback string) string {
 	return fallback
 }
 
+// LookupPrefixed returns the first defined prefixed environment variable.
+// Unlike Prefixed, an explicitly defined empty value is still reported.
+func LookupPrefixed(prefixes []string, key string) (string, bool) {
+	for _, prefix := range prefixes {
+		if value, ok := os.LookupEnv(prefix + key); ok {
+			return value, true
+		}
+	}
+	return "", false
+}
+
 // Int returns a parsed integer environment value or fallback.
 func Int(key string, fallback int) int {
 	value, err := strconv.Atoi(String(key, strconv.Itoa(fallback)))
@@ -91,6 +102,28 @@ func DurationPrefixed(prefixes []string, key string, fallback time.Duration) tim
 	return ParseDuration(Prefixed(prefixes, key, fallback.String()), fallback)
 }
 
+// DurationPrefixedE parses a prefixed duration and reports malformed values.
+// Keys ending in _MS or _SEC also accept a bare integer in that unit, while
+// Go duration and HH:MM:SS syntax remain supported for compatibility.
+func DurationPrefixedE(prefixes []string, key string, fallback time.Duration) (time.Duration, error) {
+	raw, ok := LookupPrefixed(prefixes, key)
+	if !ok {
+		return fallback, nil
+	}
+	unit := time.Nanosecond
+	switch {
+	case strings.HasSuffix(key, "_MS"):
+		unit = time.Millisecond
+	case strings.HasSuffix(key, "_SEC"):
+		unit = time.Second
+	}
+	value, err := parseDurationWithUnit(raw, unit, strings.HasSuffix(key, "_MS") || strings.HasSuffix(key, "_SEC"))
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return value, nil
+}
+
 // Slice returns a comma-separated environment value as trimmed items.
 func Slice(key string) []string {
 	raw := strings.TrimSpace(os.Getenv(key))
@@ -108,12 +141,27 @@ func Slice(key string) []string {
 
 // ParseDuration parses Go or HH:MM:SS duration syntax.
 func ParseDuration(raw string, fallback time.Duration) time.Duration {
-	if value, err := time.ParseDuration(raw); err == nil {
+	value, err := parseDurationWithUnit(raw, time.Nanosecond, false)
+	if err == nil {
 		return value
 	}
-	var h, m, s int
-	if _, err := fmt.Sscanf(raw, "%d:%d:%d", &h, &m, &s); err == nil {
-		return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute + time.Duration(s)*time.Second
-	}
 	return fallback
+}
+
+func parseDurationWithUnit(raw string, unit time.Duration, allowBareInteger bool) (time.Duration, error) {
+	if value, err := time.ParseDuration(raw); err == nil {
+		return value, nil
+	}
+	var h, m, s int
+	if n, err := fmt.Sscanf(raw, "%d:%d:%d", &h, &m, &s); err == nil && n == 3 {
+		return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute + time.Duration(s)*time.Second, nil
+	}
+	if !allowBareInteger {
+		return 0, fmt.Errorf("invalid duration %q", raw)
+	}
+	integer, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q", raw)
+	}
+	return time.Duration(integer) * unit, nil
 }
