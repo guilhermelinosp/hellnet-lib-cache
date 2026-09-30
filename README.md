@@ -344,6 +344,23 @@ For dependency injection, use `NewWithOptions` with `WithOptions`, `WithProvider
 Test-only dependencies: `github.com/alicebob/miniredis/v2` provides hermetic
 Redis behavior tests, and `go.uber.org/goleak` checks for leaked goroutines.
 
+## Observabilidade
+
+Passe `*telemetry.Telemetry` via `WithInstrumentation`:
+
+```go
+cache, err := cache.NewWithOptions(ctx,
+    cache.WithOptions(options),
+    cache.WithInstrumentation(tel),
+)
+```
+
+Spans ctx-first: `cache.get`, `cache.set`, `cache.remove`, `cache.exists`,
+`cache.get_or_set` e `cache.health`. Métricas: `hellnet.cache.operations` e
+`hellnet.cache.operation.duration` (`s`), com `operation` e `result`.
+`HealthCheck(ctx)` é para `/health`; cache degradada não deve, por si só,
+determinar `/ready`.
+
 ## License
 
 Apache 2.0 © 2026 Hellnet

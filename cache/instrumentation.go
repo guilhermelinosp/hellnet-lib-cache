@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/dgraph-io/ristretto/v2"
+	"github.com/guilhermelinosp/hellnet-lib-telemetry/instrument"
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"github.com/sony/gobreaker"
 )
@@ -131,19 +132,27 @@ func (p *MemoryProvider) Metrics() *Metrics { return p.metrics }
 // from it (Options.OperationTimeout). go-redis requires a context; callers
 // never supply one.
 type ExternalProvider struct {
-	baseCtx context.Context
+	baseCtx context.Context //nolint:containedctx // TODO(telemetry-fase-D): legacy wrapper retains construction context.
 	opts    Options
 	metrics *Metrics
 	client  *redis.Client
 	breaker *gobreaker.CircuitBreaker
+	logger  instrument.Logger
 }
 
 // NewExternalProvider builds the L2 external provider backed by a
 // Redis-compatible server using the options. The given context is captured
 // once and propagated internally to all operations.
-func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider {
+func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider { //nolint:contextcheck // TODO(telemetry-fase-D): legacy constructor context.
+	return newExternalProvider(ctx, opts, nil)
+}
+
+func newExternalProvider(ctx context.Context, opts Options, inst instrument.Instrumentation) *ExternalProvider { //nolint:contextcheck // constructor receives context lineage for Redis instrumentation logs.
+	if inst == nil {
+		inst = instrument.Noop()
+	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = context.Background() //nolint:contextcheck // compatibility for direct legacy provider construction.
 	}
 	client := redis.NewClient(&redis.Options{
 		Addr:            opts.Connection,
@@ -155,6 +164,14 @@ func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider {
 		MaxRetries:      opts.RetryCount,
 		MinRetryBackoff: opts.RetryBaseDelay,
 	})
+	if inst != nil {
+		if err := redisotel.InstrumentTracing(client, redisotel.WithTracerProvider(inst.TracerProvider())); err != nil {
+			inst.Logger(instrumentationScope).Error(ctxOrBackground(ctx), "cache redis tracing instrumentation failed", "error", err)
+		}
+		if err := redisotel.InstrumentMetrics(client, redisotel.WithMeterProvider(inst.MeterProvider())); err != nil {
+			inst.Logger(instrumentationScope).Error(ctxOrBackground(ctx), "cache redis metrics instrumentation failed", "error", err)
+		}
+	}
 
 	// clamp to uint32 range (safe conversion, avoids gosec G115 on repeated casts).
 	// #nosec G115 -- clampInt bounds the value to [0, MaxUint32], so the cast is safe.
@@ -172,7 +189,7 @@ func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider {
 			return err == nil || errors.Is(err, redis.Nil)
 		},
 		OnStateChange: func(name string, from, to gobreaker.State) {
-			log.Printf("[hellnet-cache] external circuit breaker %s: %s -> %s", name, from, to)
+			inst.Logger(instrumentationScope).Warn(ctxOrBackground(ctx), "cache external circuit breaker state changed", "breaker", name, "from", from.String(), "to", to.String())
 		},
 	}
 
@@ -182,6 +199,7 @@ func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider {
 		metrics: newMetrics("L2-External"),
 		client:  client,
 		breaker: gobreaker.NewCircuitBreaker(cb),
+		logger:  inst.Logger(instrumentationScope),
 	}
 }
 
@@ -189,11 +207,15 @@ func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider {
 // context, bounded by Options.OperationTimeout. Callers must invoke the
 // returned CancelFunc.
 func (p *ExternalProvider) opCtx() (context.Context, context.CancelFunc) {
+	return p.opCtxFrom(p.baseCtx)
+}
+
+func (p *ExternalProvider) opCtxFrom(parent context.Context) (context.Context, context.CancelFunc) {
 	t := p.opts.OperationTimeout
 	if t <= 0 {
 		t = defaultOperationTimeout
 	}
-	return context.WithTimeout(p.baseCtx, t)
+	return context.WithTimeout(ctxOrBackground(parent), t)
 }
 
 // Name returns the layer name.
@@ -202,7 +224,12 @@ func (p *ExternalProvider) Name() string { return "L2-External" }
 // Get retrieves raw bytes by key. Returns nil on miss or backend failure
 // (graceful degradation).
 func (p *ExternalProvider) Get(key string) ([]byte, error) {
-	ctx, cancel := p.opCtx()
+	return p.GetContext(p.baseCtx, key)
+}
+
+// GetContext retrieves a value using parent for backend cancellation and trace context.
+func (p *ExternalProvider) GetContext(parent context.Context, key string) ([]byte, error) {
+	ctx, cancel := p.opCtxFrom(parent)
 	defer cancel()
 
 	res, err := p.breaker.Execute(func() (any, error) {
@@ -216,7 +243,7 @@ func (p *ExternalProvider) Get(key string) ([]byte, error) {
 		return v, nil
 	})
 	if err != nil {
-		log.Printf("[hellnet-cache] external get failed for %s: %v", key, err)
+		p.logger.Warn(ctx, "cache external get failed", "error", err)
 		return nil, nil // graceful degradation
 	}
 	if v, ok := res.([]byte); ok && v != nil {
@@ -234,7 +261,12 @@ func (p *ExternalProvider) Get(key string) ([]byte, error) {
 // distinguish a total write failure from degraded-but-successful partial
 // writes.
 func (p *ExternalProvider) Set(key string, value []byte, ttl time.Duration) error {
-	ctx, cancel := p.opCtx()
+	return p.SetContext(p.baseCtx, key, value, ttl)
+}
+
+// SetContext stores a value using parent for backend cancellation and trace context.
+func (p *ExternalProvider) SetContext(parent context.Context, key string, value []byte, ttl time.Duration) error {
+	ctx, cancel := p.opCtxFrom(parent)
 	defer cancel()
 
 	actual := p.opts.capTTL(defaultTTL(ttl, p.opts.DefaultTTL))
@@ -243,7 +275,7 @@ func (p *ExternalProvider) Set(key string, value []byte, ttl time.Duration) erro
 	})
 	p.metrics.RecordSet()
 	if err != nil {
-		log.Printf("[hellnet-cache] external set failed for %s: %v", key, err)
+		p.logger.Warn(ctx, "cache external set failed", "error", err)
 		return err
 	}
 	return nil
@@ -251,14 +283,19 @@ func (p *ExternalProvider) Set(key string, value []byte, ttl time.Duration) erro
 
 // Remove deletes a key.
 func (p *ExternalProvider) Remove(key string) error {
-	ctx, cancel := p.opCtx()
+	return p.RemoveContext(p.baseCtx, key)
+}
+
+// RemoveContext deletes a value using parent for backend cancellation and trace context.
+func (p *ExternalProvider) RemoveContext(parent context.Context, key string) error {
+	ctx, cancel := p.opCtxFrom(parent)
 	defer cancel()
 
 	_, err := p.breaker.Execute(func() (any, error) {
 		return p.client.Del(ctx, p.opts.formatKey(key)).Result()
 	})
 	if err != nil {
-		log.Printf("[hellnet-cache] external delete failed for %s: %v", key, err)
+		p.logger.Warn(ctx, "cache external delete failed", "error", err)
 	}
 	p.metrics.RecordRemove()
 	return nil
@@ -266,7 +303,12 @@ func (p *ExternalProvider) Remove(key string) error {
 
 // Exists reports whether a key exists.
 func (p *ExternalProvider) Exists(key string) (bool, error) {
-	ctx, cancel := p.opCtx()
+	return p.ExistsContext(p.baseCtx, key)
+}
+
+// ExistsContext checks a value using parent for backend cancellation and trace context.
+func (p *ExternalProvider) ExistsContext(parent context.Context, key string) (bool, error) {
+	ctx, cancel := p.opCtxFrom(parent)
 	defer cancel()
 
 	res, err := p.breaker.Execute(func() (any, error) {
@@ -322,7 +364,7 @@ func (p *ExternalProvider) AllowN(key string, increment int64, window time.Durat
 		return raw, err
 	})
 	if err != nil {
-		log.Printf("[hellnet-cache] external allow failed for %s: %v", key, err)
+		p.logger.Warn(ctx, "cache external allow failed", "error", err)
 		return 0, 0, fmt.Errorf("cache: allow %q: %w", key, err)
 	}
 
@@ -355,7 +397,7 @@ func (p *ExternalProvider) TryLock(key, token string, ttl time.Duration) (bool, 
 		return ok, err
 	})
 	if err != nil {
-		log.Printf("[hellnet-cache] external try-lock failed for %s: %v", key, err)
+		p.logger.Warn(ctx, "cache external try-lock failed", "error", err)
 		return false, fmt.Errorf("cache: try-lock %q: %w", key, err)
 	}
 	ok, _ := res.(bool)
@@ -380,7 +422,7 @@ func (p *ExternalProvider) Release(key, token string) error {
 		return n, err
 	})
 	if err != nil {
-		log.Printf("[hellnet-cache] external unlock failed for %s: %v", key, err)
+		p.logger.Warn(ctx, "cache external unlock failed", "error", err)
 		return fmt.Errorf("cache: unlock %q: %w", key, err)
 	}
 	if deleted, _ := res.(int64); deleted == 0 {
