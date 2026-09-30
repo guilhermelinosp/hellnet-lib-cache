@@ -44,8 +44,6 @@ linters:
               desc: use the telemetry contract logger
             - pkg: go.opentelemetry.io/otel/sdk
               desc: SDK is test-harness-only
-            - pkg: github.com/guilhermelinosp/hellnet-lib-telemetry/telemetrytest
-              desc: deprecated test package; use internal/obstest
     forbidigo:
       forbid:
         - pattern: 'slog.Debug'
@@ -62,7 +60,6 @@ linters:
     paths:
       - "_test\\.go$"
       - "^_examples/"
-      - "internal/obstest/"
 
 formatters:
   enable:
