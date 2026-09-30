@@ -293,7 +293,8 @@ var _ Cache = (*HybridCache)(nil)
 // New creates a cache from the environment: it loads .env and resolves
 // configuration from HELLNET_CACHE_* with HELLNET_* as fallback. inst is the
 // Hellnet observability contract (for example a *telemetry.Telemetry, or nil to
-// emit no telemetry). If L2 is explicitly enabled but no
+// emit no telemetry; a nil pointer such as a nil *telemetry.Telemetry is treated
+// the same way). If L2 is explicitly enabled but no
 // HELLNET_CACHE_CONNECTION is present, New returns an error. Without explicit
 // enablement it falls back to memory-only. Use NewWithOptions to supply
 // explicit options, providers or a serializer.
@@ -427,6 +428,7 @@ func NewWithOptions(ctx context.Context, options ...Option) (*HybridCache, error
 }
 
 func newWithDependencies(ctx context.Context, o Options, supplied []Provider, serializer Serializer, customProviders bool, inst instrument.Instrumentation) (*HybridCache, error) {
+	inst = instrument.Resolve(inst)
 	if o.EnableL2 && o.Connection == "" {
 		if o.l2Explicit {
 			return nil, fmt.Errorf("cache: L2 explicitly enabled but HELLNET_CACHE_CONNECTION is not configured")
