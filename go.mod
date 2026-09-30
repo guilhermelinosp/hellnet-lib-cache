@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/dgraph-io/ristretto/v2 v2.2.0
-	github.com/guilhermelinosp/hellnet-lib-telemetry v1.9.2-0.20260930173052-f25f8fd023cc
+	github.com/guilhermelinosp/hellnet-lib-telemetry v1.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/redis/go-redis/extra/redisotel/v9 v9.22.0
 	github.com/redis/go-redis/v9 v9.22.0
