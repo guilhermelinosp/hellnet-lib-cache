@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,19 +68,22 @@ type Cache interface {
 // Options is the internal cache configuration resolved by New from the
 // environment. It remains visible because provider constructors use it.
 type Options struct {
-	L1Provider                string
-	L1SizeLimitMB             int
-	L1DefaultTTL              time.Duration
+	// L1Provider selects the in-process provider. Currently only "memory" is supported.
+	L1Provider    string
+	L1SizeLimitMB int
+	L1DefaultTTL  time.Duration
+	// Deprecated: ristretto owns expiration scanning; retained for compatibility.
 	L1ExpirationScanFrequency time.Duration
 	L1SlidingExpiration       bool
 
-	Connection             string
-	Password               string
-	Database               int
-	KeyPrefix              string
-	ConnectTimeout         time.Duration
-	ReadTimeout            time.Duration
-	RetryCount             int
+	Connection     string
+	Password       string
+	Database       int
+	KeyPrefix      string
+	ConnectTimeout time.Duration
+	ReadTimeout    time.Duration
+	RetryCount     int
+	// RetryBaseDelay controls the base Redis retry backoff.
 	RetryBaseDelay         time.Duration
 	CircuitBreakerFailures int
 	CircuitBreakerDuration time.Duration
@@ -90,6 +94,7 @@ type Options struct {
 	// HELLNET_CACHE_OPERATION_TIMEOUT_MS (integer milliseconds).
 	OperationTimeout time.Duration
 
+	// DefaultSerializer selects the built-in serializer. "json" is supported.
 	DefaultSerializer string
 
 	EnableL1    bool
@@ -98,10 +103,18 @@ type Options struct {
 	MaxTTL      time.Duration
 	TouchOnRead bool
 	TouchTTL    time.Duration
+
+	l2Explicit bool
 }
 
 // validate checks that required fields are set when their feature is enabled.
 func (o Options) validate() error {
+	if o.L1Provider != "" && o.L1Provider != "memory" {
+		return fmt.Errorf("cache: unsupported L1 provider %q", o.L1Provider)
+	}
+	if o.DefaultSerializer != "" && o.DefaultSerializer != "json" {
+		return fmt.Errorf("cache: unsupported serializer %q", o.DefaultSerializer)
+	}
 	var missing []string
 	if o.EnableL2 {
 		if o.Connection == "" {
@@ -247,6 +260,7 @@ type HybridCache struct {
 	serializer Serializer
 	providers  []Provider
 	logger     *log.Logger
+	now        func() time.Time
 
 	flight  singleflight.Group // GetOrSet stampede protection, keyed by cache key
 	warming sync.Map           // key string -> struct{}
@@ -266,45 +280,136 @@ var _ Cache = (*HybridCache)(nil)
 // New follows the hellnet-lib-telemetry constructor pattern: it creates the
 // base context, loads .env, and resolves configuration from HELLNET_CACHE_*
 // with HELLNET_* as fallback.
-// If L2 is enabled but no HELLNET_CACHE_CONNECTION is present, the library
-// automatically falls back to memory-only (L2 disabled) instead of erroring.
+// If L2 is explicitly enabled but no HELLNET_CACHE_CONNECTION is present, New
+// returns an error. Without explicit enablement it falls back to memory-only.
 func New() (*HybridCache, error) {
 	ctx := context.Background()
 
-	_ = env.LoadDotEnv()
-
-	o := Options{
-		L1Provider:                env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_PROVIDER", "memory"),
-		L1SizeLimitMB:             env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_SIZE_LIMIT_MB", 100),
-		L1DefaultTTL:              env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_DEFAULT_TTL", 5*time.Minute),
-		L1ExpirationScanFrequency: env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_EXPIRATION_SCAN_FREQUENCY", time.Minute),
-		L1SlidingExpiration:       env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "L1_SLIDING_EXPIRATION", false),
-		Connection:                env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CONNECTION", ""),
-		Password:                  env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "PASSWORD", ""),
-		Database:                  env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "DATABASE", 0),
-		KeyPrefix:                 env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "KEY_PREFIX", "hellnet:cache:"),
-		ConnectTimeout:            env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CONNECT_TIMEOUT", 5*time.Second),
-		ReadTimeout:               env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "SYNC_TIMEOUT", time.Second),
-		RetryCount:                env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "RETRY_COUNT", 2),
-		RetryBaseDelay:            env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "RETRY_BASE_DELAY_MS", 200*time.Millisecond),
-		CircuitBreakerFailures:    env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CB_FAILURES", 5),
-		CircuitBreakerDuration:    env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "CB_DURATION_SEC", 30*time.Second),
-		OperationTimeout:          time.Duration(env.IntPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "OPERATION_TIMEOUT_MS", 5000)) * time.Millisecond,
-		DefaultSerializer:         env.Prefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "DEFAULT_SERIALIZER", "json"),
-		EnableL1:                  env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "ENABLE_L1", true),
-		EnableL2:                  env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "ENABLE_L2", true),
-		DefaultTTL:                env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "DEFAULT_TTL", 30*time.Minute),
-		MaxTTL:                    env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "MAX_TTL", 24*time.Hour),
-		TouchOnRead:               env.BoolPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "TOUCH_ON_READ", false),
-		TouchTTL:                  env.DurationPrefixed([]string{"HELLNET_CACHE_", "HELLNET_"}, "TOUCH_TTL", 10*time.Minute),
+	_ = env.Environment()
+	o, err := optionsFromEnv()
+	if err != nil {
+		return nil, err
 	}
 	return newWithOptions(ctx, o)
 }
 
+func optionsFromEnv() (Options, error) {
+	prefixes := []string{"HELLNET_CACHE_", "HELLNET_"}
+	var readErr error
+	readDuration := func(key string, fallback time.Duration) time.Duration {
+		value, err := cacheDurationEnv(prefixes, key, fallback)
+		if err != nil && readErr == nil {
+			readErr = err
+		}
+		return value
+	}
+	o := Options{
+		L1Provider:                cacheEnv(prefixes, "L1_PROVIDER", "memory"),
+		L1SizeLimitMB:             cacheIntEnv(prefixes, "L1_SIZE_LIMIT_MB", 100),
+		L1DefaultTTL:              readDuration("L1_DEFAULT_TTL", 5*time.Minute),
+		L1ExpirationScanFrequency: readDuration("L1_EXPIRATION_SCAN_FREQUENCY", time.Minute),
+		L1SlidingExpiration:       cacheBoolEnv(prefixes, "L1_SLIDING_EXPIRATION", false),
+		Connection:                cacheEnv(prefixes, "CONNECTION", ""),
+		Password:                  cacheEnv(prefixes, "PASSWORD", ""),
+		Database:                  cacheIntEnv(prefixes, "DATABASE", 0),
+		KeyPrefix:                 cacheEnv(prefixes, "KEY_PREFIX", "hellnet:cache:"),
+		ConnectTimeout:            readDuration("CONNECT_TIMEOUT", 5*time.Second),
+		ReadTimeout:               readDuration("SYNC_TIMEOUT", time.Second),
+		RetryCount:                cacheIntEnv(prefixes, "RETRY_COUNT", 2),
+		RetryBaseDelay:            readDuration("RETRY_BASE_DELAY_MS", 200*time.Millisecond),
+		CircuitBreakerFailures:    cacheIntEnv(prefixes, "CB_FAILURES", 5),
+		CircuitBreakerDuration:    readDuration("CB_DURATION_SEC", 30*time.Second),
+		OperationTimeout:          readDuration("OPERATION_TIMEOUT_MS", 5*time.Second),
+		DefaultSerializer:         cacheEnv(prefixes, "DEFAULT_SERIALIZER", "json"),
+		EnableL1:                  cacheBoolEnv(prefixes, "ENABLE_L1", true),
+		EnableL2:                  cacheBoolEnv(prefixes, "ENABLE_L2", true),
+		DefaultTTL:                readDuration("DEFAULT_TTL", 30*time.Minute),
+		MaxTTL:                    readDuration("MAX_TTL", 24*time.Hour),
+		TouchOnRead:               cacheBoolEnv(prefixes, "TOUCH_ON_READ", false),
+		TouchTTL:                  readDuration("TOUCH_TTL", 10*time.Minute),
+	}
+	if raw, ok := cacheLookupEnv(prefixes, "ENABLE_L2"); ok && strings.EqualFold(strings.TrimSpace(raw), "true") {
+		o.l2Explicit = true
+	}
+	if readErr != nil {
+		return Options{}, readErr
+	}
+	return o, nil
+}
+
 // newWithOptions is the explicit construction seam used by package tests.
 func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
+	return newWithDependencies(ctx, o, nil, nil, false)
+}
+
+// Option configures NewWithOptions without changing the existing constructors.
+type Option func(*constructorOptions) error
+
+type constructorOptions struct {
+	options        Options
+	hasOptions     bool
+	providers      []Provider
+	customProvider bool
+	serializer     Serializer
+}
+
+// WithOptions supplies explicit cache configuration.
+func WithOptions(options Options) Option {
+	return func(config *constructorOptions) error {
+		config.options = options
+		config.hasOptions = true
+		return nil
+	}
+}
+
+// WithProviders supplies an explicit provider stack for tests or custom backends.
+func WithProviders(providers ...Provider) Option {
+	return func(config *constructorOptions) error {
+		config.providers = append([]Provider(nil), providers...)
+		config.customProvider = true
+		return nil
+	}
+}
+
+// WithSerializer supplies the serializer used for cache values.
+func WithSerializer(serializer Serializer) Option {
+	return func(config *constructorOptions) error {
+		if serializer == nil {
+			return fmt.Errorf("cache: serializer must not be nil")
+		}
+		config.serializer = serializer
+		return nil
+	}
+}
+
+// NewWithOptions constructs a cache without loading dotenv files. New remains
+// the environment-first constructor and keeps its existing dotenv behavior.
+func NewWithOptions(ctx context.Context, options ...Option) (*HybridCache, error) {
+	config := constructorOptions{}
+	var err error
+	for _, option := range options {
+		if option == nil {
+			continue
+		}
+		if err := option(&config); err != nil {
+			return nil, err
+		}
+	}
+	if !config.hasOptions {
+		config.options, err = optionsFromEnv()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return newWithDependencies(ctx, config.options, config.providers, config.serializer, config.customProvider)
+}
+
+func newWithDependencies(ctx context.Context, o Options, supplied []Provider, serializer Serializer, customProviders bool) (*HybridCache, error) {
 	if o.EnableL2 && o.Connection == "" {
-		log.Printf("[hellnet-cache] HELLNET_CACHE_CONNECTION not set — falling back to memory-only (L2 disabled)")
+		if o.l2Explicit {
+			return nil, fmt.Errorf("cache: L2 explicitly enabled but HELLNET_CACHE_CONNECTION is not configured")
+		}
+		warnL2DegradedOnce()
 		o.EnableL2 = false
 	}
 
@@ -317,28 +422,43 @@ func newWithOptions(ctx context.Context, o Options) (*HybridCache, error) {
 	baseCtx, cancel := context.WithCancel(ctx)
 
 	var providers []Provider
-
-	if o.EnableL1 {
-		mp, err := NewMemoryProvider(o)
-		if err != nil {
-			cancel()
-			return nil, err
+	if customProviders {
+		providers = append(providers, supplied...)
+	} else {
+		if o.EnableL1 {
+			mp, err := NewMemoryProvider(o)
+			if err != nil {
+				cancel()
+				return nil, err
+			}
+			providers = append(providers, mp)
 		}
-		providers = append(providers, mp)
-	}
 
-	if o.EnableL2 {
-		providers = append(providers, NewExternalProvider(baseCtx, o))
+		if o.EnableL2 {
+			providers = append(providers, NewExternalProvider(baseCtx, o))
+		}
+	}
+	if serializer == nil {
+		serializer = NewJSONSerializer()
 	}
 
 	return &HybridCache{
 		baseCtx:    baseCtx,
 		cancel:     cancel,
 		opts:       o,
-		serializer: NewJSONSerializer(),
+		serializer: serializer,
 		providers:  providers,
 		logger:     log.Default(),
+		now:        time.Now,
 	}, nil
+}
+
+var l2DegradedWarning sync.Once
+
+func warnL2DegradedOnce() {
+	l2DegradedWarning.Do(func() {
+		log.Printf("[hellnet-cache] HELLNET_CACHE_CONNECTION not set; running with L2 disabled")
+	})
 }
 
 // MustNew is like New but panics on error. Use at startup.
@@ -369,6 +489,13 @@ func (h *HybridCache) opCtx() (context.Context, context.CancelFunc) {
 		t = defaultOperationTimeout
 	}
 	return context.WithTimeout(h.baseCtx, t)
+}
+
+func (h *HybridCache) nowTime() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
 }
 
 // Get retrieves a value by key under the internal operation context. Returns

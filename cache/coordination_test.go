@@ -146,7 +146,7 @@ func TestIdempotent_FailureIsNotCached_NextCallRetries(t *testing.T) {
 	}
 }
 
-func TestIdempotent_ConcurrentSameKey_ExecutesAtMostFewTimes(t *testing.T) {
+func TestIdempotent_ConcurrentSameKey_ExecutesExactlyOnce(t *testing.T) {
 	c := mustHybridL1(t)
 
 	const callers = 100
@@ -170,8 +170,8 @@ func TestIdempotent_ConcurrentSameKey_ExecutesAtMostFewTimes(t *testing.T) {
 	}
 	wg.Wait()
 
-	if n := executions.Load(); n == 0 || n > 20 {
-		t.Fatalf("fn executed %d times, want small (1 expected, <=20 documented best-effort)", n)
+	if n := executions.Load(); n != 1 {
+		t.Fatalf("fn executed %d times, want exactly 1 within one process", n)
 	}
 	for i := range callers {
 		if errs[i] != nil {

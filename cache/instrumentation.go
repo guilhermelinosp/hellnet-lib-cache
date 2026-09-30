@@ -146,13 +146,14 @@ func NewExternalProvider(ctx context.Context, opts Options) *ExternalProvider {
 		ctx = context.Background()
 	}
 	client := redis.NewClient(&redis.Options{
-		Addr:         opts.Connection,
-		Password:     opts.Password,
-		DB:           opts.Database,
-		DialTimeout:  opts.ConnectTimeout,
-		ReadTimeout:  opts.ReadTimeout,
-		WriteTimeout: opts.ReadTimeout,
-		MaxRetries:   opts.RetryCount,
+		Addr:            opts.Connection,
+		Password:        opts.Password,
+		DB:              opts.Database,
+		DialTimeout:     opts.ConnectTimeout,
+		ReadTimeout:     opts.ReadTimeout,
+		WriteTimeout:    opts.ReadTimeout,
+		MaxRetries:      opts.RetryCount,
+		MinRetryBackoff: opts.RetryBaseDelay,
 	})
 
 	// clamp to uint32 range (safe conversion, avoids gosec G115 on repeated casts).

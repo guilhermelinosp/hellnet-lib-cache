@@ -41,7 +41,7 @@ Cache é a **geladeira da casa**. O banco de dados é o **mercado**:
 ### Primeiras linhas
 
 ```go
-c, err := cache.New() // carrega CACHE_* sozinho
+c, err := cache.New() // carrega HELLNET_CACHE_* sozinho
 
 var menu map[string]string
 err = c.GetOrSet("menu-de-hoje", &menu, func(ctx context.Context) (any, error) {
@@ -53,7 +53,7 @@ Linha por linha:
 
 1. `cache.New()` — monta a geladeira (L1) e a despensa (L2), cria seu contexto
    interno e lê as variáveis de ambiente; nenhuma operação recebe contexto.
-2. A biblioteca lê as variáveis `CACHE_*`.
+2. A biblioteca lê `HELLNET_CACHE_*`, com fallback para `HELLNET_*`.
    Toda operação roda com timeout interno
    (`Options.OperationTimeout`, padrão `5s`).
 3. `GetOrSet("menu-de-hoje", ...)` — checa geladeira e despensa pela chave.
@@ -92,7 +92,7 @@ import (
 )
 
 func main() {
-	// New() owns its context, loads .env, and resolves CACHE_* before deciding L1/L2.
+	// New() owns its context, loads .env, and resolves HELLNET_CACHE_* before deciding L1/L2.
 	c, err := cache.New()
 	if err != nil {
 		log.Fatal(err)
@@ -124,8 +124,8 @@ func main() {
 ### Minimal env
 
 ```bash
-export CACHE_CONNECTION=localhost:6379
-# optional: export CACHE_PASSWORD=...
+export HELLNET_CACHE_CONNECTION=localhost:6379
+# optional: export HELLNET_CACHE_PASSWORD=...
 ```
 
 ## Usage
@@ -156,7 +156,7 @@ func (s *OrderService) Invalidate(id string) error {
 operation and background goroutine (warming/touch). There are no `*Context`
 method variants. Each operation runs under an internally derived
 timeout bounded by `OperationTimeout` (default `5s`, env-tunable via
-`CACHE_OPERATION_TIMEOUT`); L2 network calls additionally honor
+`HELLNET_CACHE_OPERATION_TIMEOUT_MS`); L2 network calls additionally honor
 `ConnectTimeout`/`ReadTimeout`. Calling `Close()` aborts all in-flight
 library work.
 
@@ -304,28 +304,36 @@ L1 uses **absolute expiration** by default. Sliding is opt-in via
 
 ## Options
 
-### Env vars (`CACHE_*`)
+### Env vars (`HELLNET_CACHE_*`)
 
-| Env var                            | Default              | Description                    |
-|------------------------------------|----------------------|--------------------------------|
-| `CONNECTION`                       | *(required)*         | External backend host:port     |
-| `PASSWORD`                         | *(optional)*         | External backend password (empty = no auth) |
-| `KEY_PREFIX`                       | `hellnet:cache:`     | Key prefix in backend          |
-| `L1_DEFAULT_TTL`                   | `00:05:00`           | L1 fallback TTL                |
-| `DEFAULT_TTL`                      | `00:30:00`           | Global fallback TTL            |
-| `MAX_TTL`                          | `24:00:00`           | Safety cap                     |
-| `TOUCH_ON_READ`                    | `false`              | Auto-extend TTL on hit         |
-| `TOUCH_TTL`                        | `00:10:00`           | Extension amount               |
-| `L1_SLIDING_EXPIRATION`            | `false`              | Sliding vs Absolute            |
-| `RETRY_COUNT`                      | `2`                  | Max retry attempts             |
-| `RETRY_BASE_DELAY`                 | `200ms`              | Base retry delay               |
-| `CB_FAILURES`                      | `5`                  | Circuit breaker threshold      |
-| `CB_DURATION`                      | `30s`                | Circuit breaker duration       |
-| `OPERATION_TIMEOUT`                | `5s`                 | Per-operation timeout              |
-| `ENABLE_L1`                        | `true`               | Enable L1                      |
-| `ENABLE_L2`                        | `true`               | Enable L2                      |
+| Env var                              | Default              | Description                    |
+|--------------------------------------|----------------------|--------------------------------|
+| `HELLNET_CACHE_CONNECTION`           | *(optional)*         | External backend host:port     |
+| `HELLNET_CACHE_PASSWORD`             | *(optional)*         | External backend password      |
+| `HELLNET_CACHE_KEY_PREFIX`           | `hellnet:cache:`     | Key prefix in backend          |
+| `HELLNET_CACHE_L1_DEFAULT_TTL`       | `00:05:00`           | L1 fallback TTL                |
+| `HELLNET_CACHE_DEFAULT_TTL`          | `00:30:00`           | Global fallback TTL            |
+| `HELLNET_CACHE_MAX_TTL`              | `24:00:00`           | Safety cap                     |
+| `HELLNET_CACHE_TOUCH_ON_READ`        | `false`              | Auto-extend TTL on hit         |
+| `HELLNET_CACHE_TOUCH_TTL`            | `00:10:00`           | Extension amount               |
+| `HELLNET_CACHE_L1_SLIDING_EXPIRATION`| `false`              | Sliding vs absolute            |
+| `HELLNET_CACHE_RETRY_COUNT`          | `2`                  | Max retry attempts             |
+| `HELLNET_CACHE_RETRY_BASE_DELAY_MS`  | `200ms`              | Bare integer means milliseconds|
+| `HELLNET_CACHE_CB_FAILURES`          | `5`                  | Circuit breaker threshold      |
+| `HELLNET_CACHE_CB_DURATION_SEC`      | `30s`                | Bare integer means seconds     |
+| `HELLNET_CACHE_OPERATION_TIMEOUT_MS` | `5000`               | Bare integer means milliseconds|
+| `HELLNET_CACHE_ENABLE_L1`            | `true`               | Enable L1                      |
+| `HELLNET_CACHE_ENABLE_L2`            | `true`               | Enable L2                      |
 
-Env vars accept Go duration syntax (`5m`, `30s`) or clock-style (`00:05:00`).
+Variables accept Go duration syntax (`5m`, `30s`) or clock-style (`00:05:00`).
+Variables ending in `_MS` or `_SEC` also accept bare integers in their declared unit.
+A defined invalid duration returns an error from `New`; it no longer silently uses the default.
+
+When `HELLNET_CACHE_ENABLE_L2=true` is explicit, missing `HELLNET_CACHE_CONNECTION` is an error.
+When L2 is not explicitly enabled, the cache keeps its memory-only fallback and emits one warning.
+
+For dependency injection, use `NewWithOptions` with `WithOptions`, `WithProviders`, and `WithSerializer`.
+`New` keeps loading `.env` for backward compatibility; `NewWithOptions` does not load dotenv files.
 
 ## Dependencies
 
@@ -333,16 +341,9 @@ Env vars accept Go duration syntax (`5m`, `30s`) or clock-style (`00:05:00`).
 - `github.com/redis/go-redis/v9` — L2 external backend
 - `github.com/sony/gobreaker` — Circuit breaker (L2 resilience)
 
+Test-only dependencies: `github.com/alicebob/miniredis/v2` provides hermetic
+Redis behavior tests, and `go.uber.org/goleak` checks for leaked goroutines.
+
 ## License
 
 Apache 2.0 © 2026 Hellnet
-
-<!-- Release tags are GPG-signed by ci-templates (key fingerprint B58DF1F750BBFE4EC60CC5918367B6CA2DE60761). -->
-
-<!-- verified GPG signing -->
-
-<!-- release signing confirmed -->
-
-<!-- signed release OK -->
-
-<!-- release-sign-test 2026-08-26T12:30 -->

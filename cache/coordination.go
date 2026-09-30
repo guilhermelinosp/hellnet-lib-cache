@@ -246,7 +246,7 @@ func (h *HybridCache) allowLocal(key string, window time.Duration) (count int64,
 	h.memMu.Lock()
 	defer h.memMu.Unlock()
 
-	now := time.Now()
+	now := h.nowTime()
 	if h.memRL == nil {
 		h.memRL = make(map[string]*rateWindow)
 	}
@@ -359,7 +359,7 @@ func newLockToken() (string, error) {
 // backend, retrying every lockRetryInterval until wait elapses.
 func (h *HybridCache) lockDistributed(s Scripter, key, token string, ttl, wait time.Duration) (func() error, bool, error) {
 	fullKey := lockKey(key)
-	deadline := time.Now().Add(wait)
+	deadline := h.nowTime().Add(wait)
 
 	for {
 		acquired, aerr := s.TryLock(fullKey, token, ttl)
@@ -377,7 +377,7 @@ func (h *HybridCache) lockDistributed(s Scripter, key, token string, ttl, wait t
 			// the failure and let the caller decide.
 			return nil, false, fmt.Errorf("cache: lock %q try-acquire: %w", key, aerr)
 		}
-		if time.Now().After(deadline) {
+		if h.nowTime().After(deadline) {
 			return nil, false, nil
 		}
 		sleepFor := lockRetryInterval
@@ -392,13 +392,13 @@ func (h *HybridCache) lockDistributed(s Scripter, key, token string, ttl, wait t
 // expiry and bounded sweeping. Correctness is process-local by definition.
 func (h *HybridCache) lockLocal(key, token string, ttl, wait time.Duration) (func() error, bool, error) {
 	fullKey := lockKey(key)
-	deadline := time.Now().Add(wait)
+	deadline := h.nowTime().Add(wait)
 
 	for {
 		if h.tryLockLocal(fullKey, token, ttl) {
 			return func() error { return h.unlockLocal(fullKey, token, key) }, true, nil
 		}
-		if time.Now().After(deadline) {
+		if h.nowTime().After(deadline) {
 			return nil, false, nil
 		}
 		sleepFor := lockRetryInterval
@@ -414,7 +414,7 @@ func (h *HybridCache) tryLockLocal(key, token string, ttl time.Duration) bool {
 	h.memMu.Lock()
 	defer h.memMu.Unlock()
 
-	now := time.Now()
+	now := h.nowTime()
 	if e, exists := h.memLK[key]; exists && now.Before(e.expiresAt) {
 		return false
 	}
@@ -439,7 +439,7 @@ func (h *HybridCache) unlockLocal(key, token, origKey string) error {
 	defer h.memMu.Unlock()
 
 	e, exists := h.memLK[key]
-	if !exists || e.token != token || !time.Now().Before(e.expiresAt) {
+	if !exists || e.token != token || !h.nowTime().Before(e.expiresAt) {
 		return fmt.Errorf("cache: unlock %q: %w", origKey, ErrLockNotHeld)
 	}
 	delete(h.memLK, key)
