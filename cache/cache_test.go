@@ -185,7 +185,7 @@ func TestOptions_EnvBinding(t *testing.T) {
 	t.Setenv("HELLNET_CACHE_DEFAULT_TTL", "1h")
 	t.Setenv("HELLNET_CACHE_ENABLE_L2", "true")
 
-	c, err := New()
+	c, err := New(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestOptions_GenericFallbackAndSpecificPrecedence(t *testing.T) {
 	t.Setenv("HELLNET_CONNECTION", "generic:6379")
 	t.Setenv("HELLNET_CACHE_CONNECTION", "")
 
-	c, err := New()
+	c, err := New(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestOptions_GenericFallbackAndSpecificPrecedence(t *testing.T) {
 	_ = c.Close()
 
 	t.Setenv("HELLNET_CACHE_CONNECTION", "cache-specific:6379")
-	c, err = New()
+	c, err = New(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,9 +418,9 @@ func TestNew_DegradesToMemoryOnlyWithoutConnection(t *testing.T) {
 	t.Setenv("HELLNET_CACHE_ENV_FILE", "")
 	t.Setenv("HELLNET_ENVIRONMENT", "Development")
 
-	c, err := New()
+	c, err := New(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("New() should not error on missing connection (degrades): %v", err)
+		t.Fatalf("New(context.Background(), nil) should not error on missing connection (degrades): %v", err)
 	}
 	defer c.Close()
 
@@ -447,7 +447,7 @@ func TestNew_DegradesToMemoryOnlyWithoutConnection(t *testing.T) {
 func TestOptions_OperationTimeoutEnvBinding(t *testing.T) {
 	t.Setenv("HELLNET_CACHE_OPERATION_TIMEOUT_MS", "250")
 
-	c, err := New()
+	c, err := New(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
