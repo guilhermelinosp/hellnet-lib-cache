@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/guilhermelinosp/hellnet-lib-telemetry/telemetry"
 	"go.uber.org/goleak"
 )
 
@@ -29,7 +30,7 @@ func TestNew_ExplicitL2WithoutConnectionReturnsError(t *testing.T) {
 	t.Setenv("HELLNET_CACHE_CONNECTION", "")
 	t.Setenv("HELLNET_CACHE_LOAD_DOTENV", "false")
 
-	if _, err := New(); err == nil {
+	if _, err := New(context.Background(), nil); err == nil {
 		t.Fatal("New should reject explicitly enabled L2 without connection")
 	}
 }
@@ -40,7 +41,7 @@ func TestNew_DurationSuffixUsesDeclaredUnit(t *testing.T) {
 	t.Setenv("HELLNET_CACHE_CB_DURATION_SEC", "2")
 	t.Setenv("HELLNET_CACHE_LOAD_DOTENV", "false")
 
-	c, err := New()
+	c, err := New(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestNew_InvalidDefinedDurationReturnsError(t *testing.T) {
 	t.Setenv("HELLNET_CACHE_RETRY_BASE_DELAY_MS", "not-a-duration")
 	t.Setenv("HELLNET_CACHE_LOAD_DOTENV", "false")
 
-	if _, err := New(); err == nil {
+	if _, err := New(context.Background(), nil); err == nil {
 		t.Fatal("New should reject invalid defined duration")
 	}
 }
@@ -120,4 +121,16 @@ func TestNewWithOptions_ExplicitOptionsIgnoreEnvironment(t *testing.T) {
 		t.Fatalf("explicit options must not read environment: %v", err)
 	}
 	defer c.Close()
+}
+
+func TestNewTakesInstrumentationDirectly(t *testing.T) {
+	h := telemetry.NewHarness(t)
+	c, err := New(context.Background(), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	if c.obs.inst != h {
+		t.Fatal("New must use the supplied instrumentation")
+	}
 }

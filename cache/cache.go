@@ -290,20 +290,20 @@ type HybridCache struct {
 // abstraction after API surface changes.
 var _ Cache = (*HybridCache)(nil)
 
-// New follows the hellnet-lib-telemetry constructor pattern: it creates the
-// base context, loads .env, and resolves configuration from HELLNET_CACHE_*
-// with HELLNET_* as fallback.
-// If L2 is explicitly enabled but no HELLNET_CACHE_CONNECTION is present, New
-// returns an error. Without explicit enablement it falls back to memory-only.
-func New() (*HybridCache, error) {
-	ctx := context.Background()
-
+// New creates a cache from the environment: it loads .env and resolves
+// configuration from HELLNET_CACHE_* with HELLNET_* as fallback. inst is the
+// Hellnet observability contract (for example a *telemetry.Telemetry, or nil to
+// emit no telemetry). If L2 is explicitly enabled but no
+// HELLNET_CACHE_CONNECTION is present, New returns an error. Without explicit
+// enablement it falls back to memory-only. Use NewWithOptions to supply
+// explicit options, providers or a serializer.
+func New(ctx context.Context, inst instrument.Instrumentation) (*HybridCache, error) {
 	_ = env.Environment()
 	o, err := optionsFromEnv()
 	if err != nil {
 		return nil, err
 	}
-	return newWithOptions(ctx, o)
+	return newWithDependencies(ctx, o, nil, nil, false, inst)
 }
 
 func optionsFromEnv() (Options, error) {
@@ -487,8 +487,8 @@ func warnL2DegradedOnce(inst instrument.Instrumentation) {
 }
 
 // MustNew is like New but panics on error. Use at startup.
-func MustNew() *HybridCache {
-	c, err := New()
+func MustNew(ctx context.Context, inst instrument.Instrumentation) *HybridCache {
+	c, err := New(ctx, inst)
 	if err != nil {
 		panic(err)
 	}

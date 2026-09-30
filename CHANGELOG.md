@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `New` and `MustNew` now take `(ctx, instrument.Instrumentation)` (for example a
+  `*telemetry.Telemetry`, or nil): `cache.New(ctx, tel)` replaces `cache.New()`.
+
 ### Added
 
 - Added hermetic test isolation, goleak coverage, simulated local-coordination

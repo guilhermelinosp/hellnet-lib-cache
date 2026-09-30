@@ -41,7 +41,7 @@ Cache é a **geladeira da casa**. O banco de dados é o **mercado**:
 ### Primeiras linhas
 
 ```go
-c, err := cache.New() // carrega .env e HELLNET_CACHE_* sozinho
+c, err := cache.New(ctx, tel) // carrega .env e HELLNET_CACHE_* sozinho; tel = instrumentação ou nil
 
 var menu map[string]string
 err = c.GetOrSet("menu-de-hoje", &menu, func(ctx context.Context) (any, error) {
@@ -51,7 +51,7 @@ err = c.GetOrSet("menu-de-hoje", &menu, func(ctx context.Context) (any, error) {
 
 Linha por linha:
 
-1. `cache.New()` — monta a geladeira (L1) e a despensa (L2), cria um contexto
+1. `cache.New(ctx, tel)` — monta a geladeira (L1) e a despensa (L2), cria um contexto
    interno e lê as variáveis de ambiente. Para propagar o contexto de uma
    requisição, use a variante `*Context`, como `GetContext`.
 2. A biblioteca lê `HELLNET_CACHE_*`, com fallback para `HELLNET_*`.
@@ -93,8 +93,8 @@ import (
 )
 
 func main() {
-	// New() loads .env and resolves HELLNET_CACHE_* before deciding L1/L2.
-	c, err := cache.New()
+	// New(ctx, tel) loads .env and resolves HELLNET_CACHE_* before deciding L1/L2.
+	c, err := cache.New(ctx, tel)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -163,7 +163,7 @@ context to tracing and L2 I/O. Each operation is bounded by
 `ConnectTimeout`/`ReadTimeout`. Calling `Close()` aborts library-owned work.
 
 ```go
-c, err := cache.New()
+c, err := cache.New(ctx, tel)
 if err != nil {
     log.Fatal(err)
 }
