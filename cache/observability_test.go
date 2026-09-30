@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guilhermelinosp/hellnet-lib-cache/internal/obstest"
+	"github.com/guilhermelinosp/hellnet-lib-telemetry/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 )
 
 func TestContextFirstCacheSpanUsesCallerParent(t *testing.T) {
-	harness := obstest.New(t)
+	harness := telemetry.NewHarness(t)
 	c, err := NewWithOptions(context.Background(), WithOptions(optsL1Only()), WithInstrumentation(harness))
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestContextFirstCacheSpanUsesCallerParent(t *testing.T) {
 }
 
 func TestHealthCheckEmitsErrorMetricsAndDuration(t *testing.T) {
-	harness := obstest.New(t)
+	harness := telemetry.NewHarness(t)
 	c, err := NewWithOptions(context.Background(), WithOptions(optsL1Only()), WithProviders(unhealthyProvider{name: "L2-External"}), WithInstrumentation(harness))
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestHealthCheckEmitsErrorMetricsAndDuration(t *testing.T) {
 
 func TestTelemetryNeverRecordsCacheKey(t *testing.T) {
 	const secretKey = "customer:alice@example.com:session-token"
-	harness := obstest.New(t)
+	harness := telemetry.NewHarness(t)
 	failing := newStub("L2-External")
 	failing.onSet = func(string, []byte, time.Duration) error { return errors.New("backend unavailable") }
 	c, err := NewWithOptions(context.Background(), WithOptions(optsL1Only()), WithProviders(failing), WithInstrumentation(harness))
