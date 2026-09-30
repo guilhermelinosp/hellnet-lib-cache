@@ -134,3 +134,12 @@ func TestNewTakesInstrumentationDirectly(t *testing.T) {
 		t.Fatal("New must use the supplied instrumentation")
 	}
 }
+
+func TestNewAcceptsTypedNilTelemetry(t *testing.T) {
+	var tel *telemetry.Telemetry
+	c, err := New(context.Background(), tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+}

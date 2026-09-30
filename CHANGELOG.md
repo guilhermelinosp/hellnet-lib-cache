@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `New` resolves its instrumentation with `instrument.Resolve`: a nil value or a nil pointer
+  (for example a nil `*telemetry.Telemetry`) disables telemetry instead of panicking.
+
 - `New` and `MustNew` now take `(ctx, instrument.Instrumentation)` (for example a
   `*telemetry.Telemetry`, or nil): `cache.New(ctx, tel)` replaces `cache.New()`.
 
