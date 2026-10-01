@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Os spans do `redisotel` deixam de incluir o `dial` e os comandos de handshake da
+  conexão (`HELLO`, `CLIENT SETINFO`, `CLIENT MAINT_NOTIFICATIONS`). Eles rodam a cada
+  conexão nova, fora de qualquer requisição, e criavam traces órfãos (`redis.dial`) e um
+  span com erro quando o servidor não conhece `CLIENT MAINT_NOTIFICATIONS`. Os comandos
+  de dados (`GET`, `SET`, ...) continuam rastreados.
+
 - A `nil` `context.Context` is no longer replaced by `context.Background()`:
   callers must pass a real context, as the Go convention requires (a `nil`
   context now panics instead of silently losing cancelation and tracing).

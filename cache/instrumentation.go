@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dgraph-io/ristretto/v2"
@@ -162,7 +163,12 @@ func newExternalProvider(ctx context.Context, opts Options, inst instrument.Inst
 		MinRetryBackoff: opts.RetryBaseDelay,
 	})
 	if inst != nil {
-		if err := redisotel.InstrumentTracing(client, redisotel.WithTracerProvider(inst.TracerProvider())); err != nil {
+		if err := redisotel.InstrumentTracing(client,
+			redisotel.WithTracerProvider(inst.TracerProvider()),
+			redisotel.WithDialFilter(true),
+			redisotel.WithCommandFilter(handshakeCommand),
+			redisotel.WithCommandsFilter(handshakePipeline),
+		); err != nil {
 			inst.Logger(instrumentationScope).Error(ctx, "cache redis tracing instrumentation failed", "error", err)
 		}
 		if err := redisotel.InstrumentMetrics(client, redisotel.WithMeterProvider(inst.MeterProvider())); err != nil {
@@ -438,4 +444,32 @@ func clampInt(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// handshakeCommand reports whether cmd is part of the connection handshake
+// (HELLO, CLIENT SETINFO, CLIENT MAINT_NOTIFICATIONS ...). The redisotel filters
+// skip the span when it returns true: those commands run on every new
+// connection, outside any request, so their spans are orphan traces, and a
+// server without CLIENT MAINT_NOTIFICATIONS answers an error that go-redis
+// ignores but the span would report as a failure.
+func handshakeCommand(cmd redis.Cmder) bool {
+	switch strings.ToLower(cmd.Name()) {
+	case "hello", "client":
+		return true
+	default:
+		return false
+	}
+}
+
+// handshakePipeline reports whether every command of a pipeline is handshake.
+func handshakePipeline(cmds []redis.Cmder) bool {
+	if len(cmds) == 0 {
+		return false
+	}
+	for _, cmd := range cmds {
+		if !handshakeCommand(cmd) {
+			return false
+		}
+	}
+	return true
 }
