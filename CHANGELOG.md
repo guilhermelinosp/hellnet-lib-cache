@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A `nil` `context.Context` is no longer replaced by `context.Background()`:
+  callers must pass a real context, as the Go convention requires (a `nil`
+  context now panics instead of silently losing cancelation and tracing).
+
 - `New` resolves its instrumentation with `instrument.Resolve`: a nil value or a nil pointer
   (for example a nil `*telemetry.Telemetry`) disables telemetry instead of panicking.
 

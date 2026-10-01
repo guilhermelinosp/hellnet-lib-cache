@@ -519,7 +519,7 @@ func (h *HybridCache) opCtxFrom(parent context.Context) (context.Context, contex
 	if t <= 0 {
 		t = defaultOperationTimeout
 	}
-	return context.WithTimeout(ctxOrBackground(parent), t)
+	return context.WithTimeout(parent, t)
 }
 
 func (h *HybridCache) nowTime() time.Time {
@@ -537,7 +537,7 @@ func (h *HybridCache) Get(key string, out any) error {
 
 // GetContext retrieves a value using the caller's context as span and I/O parent.
 func (h *HybridCache) GetContext(ctx context.Context, key string, out any) (err error) {
-	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.get", trace.WithAttributes(attribute.String("hellnet.cache.operation", "get")))
+	ctx, span := h.obs.tracer.Start(ctx, "cache.get", trace.WithAttributes(attribute.String("hellnet.cache.operation", "get")))
 	defer span.End()
 	started := time.Now()
 	result := "miss"
@@ -596,7 +596,7 @@ func (h *HybridCache) Set(key string, value any, ttl time.Duration) error {
 
 // SetContext stores a value using the caller's context as span and I/O parent.
 func (h *HybridCache) SetContext(ctx context.Context, key string, value any, ttl time.Duration) (err error) {
-	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.set", trace.WithAttributes(attribute.String("hellnet.cache.operation", "set")))
+	ctx, span := h.obs.tracer.Start(ctx, "cache.set", trace.WithAttributes(attribute.String("hellnet.cache.operation", "set")))
 	defer span.End()
 	started := time.Now()
 	defer func() {
@@ -632,7 +632,7 @@ func (h *HybridCache) SetBytes(key string, data []byte, ttl time.Duration) error
 
 // SetBytesContext writes serialized data using the caller's context.
 func (h *HybridCache) SetBytesContext(ctx context.Context, key string, data []byte, ttl time.Duration) (err error) {
-	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.set", trace.WithAttributes(attribute.String("hellnet.cache.operation", "set")))
+	ctx, span := h.obs.tracer.Start(ctx, "cache.set", trace.WithAttributes(attribute.String("hellnet.cache.operation", "set")))
 	defer span.End()
 	started := time.Now()
 	defer func() {
@@ -690,7 +690,7 @@ func (h *HybridCache) Remove(key string) error {
 
 // RemoveContext removes a value using the caller's context.
 func (h *HybridCache) RemoveContext(ctx context.Context, key string) error {
-	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.remove", trace.WithAttributes(attribute.String("hellnet.cache.operation", "remove")))
+	ctx, span := h.obs.tracer.Start(ctx, "cache.remove", trace.WithAttributes(attribute.String("hellnet.cache.operation", "remove")))
 	defer span.End()
 	started := time.Now()
 	defer func() { h.obs.observe(ctx, "remove", "success", started) }()
@@ -716,7 +716,7 @@ func (h *HybridCache) Exists(key string) (bool, error) {
 
 // ExistsContext checks presence using the caller's context.
 func (h *HybridCache) ExistsContext(ctx context.Context, key string) (bool, error) {
-	ctx, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.exists", trace.WithAttributes(attribute.String("hellnet.cache.operation", "exists")))
+	ctx, span := h.obs.tracer.Start(ctx, "cache.exists", trace.WithAttributes(attribute.String("hellnet.cache.operation", "exists")))
 	defer span.End()
 	started := time.Now()
 	defer func() { h.obs.observe(ctx, "exists", "success", started) }()
@@ -732,12 +732,6 @@ func (h *HybridCache) ExistsContext(ctx context.Context, key string) (bool, erro
 	return false, nil
 }
 
-func ctxOrBackground(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
-	}
-	return ctx
-}
 func providerGet(ctx context.Context, p Provider, key string) ([]byte, error) {
 	if cp, ok := p.(contextProvider); ok {
 		return cp.GetContext(ctx, key)
@@ -783,7 +777,7 @@ func (h *HybridCache) Healthy() error {
 // to L1 or a caller-selected fallback.
 func (h *HybridCache) HealthCheck(ctx context.Context) error {
 	started := time.Now()
-	_, span := h.obs.tracer.Start(ctxOrBackground(ctx), "cache.health", trace.WithAttributes(attribute.String("hellnet.cache.operation", "health")))
+	_, span := h.obs.tracer.Start(ctx, "cache.health", trace.WithAttributes(attribute.String("hellnet.cache.operation", "health")))
 	defer span.End()
 	err := h.Healthy()
 	result := "success"
@@ -792,7 +786,7 @@ func (h *HybridCache) HealthCheck(ctx context.Context) error {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 	}
-	h.obs.observe(ctxOrBackground(ctx), "health", result, started)
+	h.obs.observe(ctx, "health", result, started)
 	return err
 }
 
@@ -814,7 +808,7 @@ func (h *HybridCache) GetOrSet(key string, out any, factory func(context.Context
 // Coalesced execution is detached from caller cancellation but retains trace
 // values and is bounded by OperationTimeout.
 func (h *HybridCache) GetOrSetContext(parent context.Context, key string, out any, factory func(context.Context) (any, error), ttl time.Duration) (err error) {
-	ctx, span := h.obs.tracer.Start(ctxOrBackground(parent), "cache.get_or_set", trace.WithAttributes(attribute.String("hellnet.cache.operation", "get_or_set")))
+	ctx, span := h.obs.tracer.Start(parent, "cache.get_or_set", trace.WithAttributes(attribute.String("hellnet.cache.operation", "get_or_set")))
 	defer span.End()
 	started := time.Now()
 	resultName := "miss"
