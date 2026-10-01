@@ -151,9 +151,6 @@ func newExternalProvider(ctx context.Context, opts Options, inst instrument.Inst
 	if inst == nil {
 		inst = instrument.Noop()
 	}
-	if ctx == nil {
-		ctx = context.Background() //nolint:contextcheck // compatibility for direct legacy provider construction.
-	}
 	client := redis.NewClient(&redis.Options{
 		Addr:            opts.Connection,
 		Password:        opts.Password,
@@ -166,10 +163,10 @@ func newExternalProvider(ctx context.Context, opts Options, inst instrument.Inst
 	})
 	if inst != nil {
 		if err := redisotel.InstrumentTracing(client, redisotel.WithTracerProvider(inst.TracerProvider())); err != nil {
-			inst.Logger(instrumentationScope).Error(ctxOrBackground(ctx), "cache redis tracing instrumentation failed", "error", err)
+			inst.Logger(instrumentationScope).Error(ctx, "cache redis tracing instrumentation failed", "error", err)
 		}
 		if err := redisotel.InstrumentMetrics(client, redisotel.WithMeterProvider(inst.MeterProvider())); err != nil {
-			inst.Logger(instrumentationScope).Error(ctxOrBackground(ctx), "cache redis metrics instrumentation failed", "error", err)
+			inst.Logger(instrumentationScope).Error(ctx, "cache redis metrics instrumentation failed", "error", err)
 		}
 	}
 
@@ -189,7 +186,7 @@ func newExternalProvider(ctx context.Context, opts Options, inst instrument.Inst
 			return err == nil || errors.Is(err, redis.Nil)
 		},
 		OnStateChange: func(name string, from, to gobreaker.State) {
-			inst.Logger(instrumentationScope).Warn(ctxOrBackground(ctx), "cache external circuit breaker state changed", "breaker", name, "from", from.String(), "to", to.String())
+			inst.Logger(instrumentationScope).Warn(ctx, "cache external circuit breaker state changed", "breaker", name, "from", from.String(), "to", to.String())
 		},
 	}
 
@@ -215,7 +212,7 @@ func (p *ExternalProvider) opCtxFrom(parent context.Context) (context.Context, c
 	if t <= 0 {
 		t = defaultOperationTimeout
 	}
-	return context.WithTimeout(ctxOrBackground(parent), t)
+	return context.WithTimeout(parent, t)
 }
 
 // Name returns the layer name.
