@@ -12,3 +12,31 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 7
+      exclude:
+        # as libs do projeto sobem sem espera
+        - "github.com/guilhermelinosp/*"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # libs do projeto (fast-platform e hellnet-lib-*): um PR so
+      hellnet:
+        patterns:
+          - "github.com/guilhermelinosp/*"
+      go-dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github.com/guilhermelinosp/*"
+        update-types:
+          - "minor"
+          - "patch"
+    labels:
+      - "dependencies"
+      - "go"
