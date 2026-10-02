@@ -10,7 +10,7 @@
 //
 // Context model: the library creates and owns a base context at construction.
 // Individual operations never take a context; each one runs under an internally
-// derived timeout configured through HELLNET_CACHE_OPERATION_TIMEOUT_MS.
+// derived timeout configured through CACHE_OPERATION_TIMEOUT_MS.
 package cache
 
 import (
@@ -103,7 +103,7 @@ type Options struct {
 	// OperationTimeout bounds every cache operation issued by this library
 	// (get/set/remove/get-or-set/warm/touch/health-check). Zero or negative
 	// values fall back to defaultOperationTimeout (5s). Environment override:
-	// HELLNET_CACHE_OPERATION_TIMEOUT_MS (integer milliseconds).
+	// CACHE_OPERATION_TIMEOUT_MS (integer milliseconds).
 	OperationTimeout time.Duration
 
 	// DefaultSerializer selects the built-in serializer. "json" is supported.
@@ -130,7 +130,7 @@ func (o Options) validate() error {
 	var missing []string
 	if o.EnableL2 {
 		if o.Connection == "" {
-			missing = append(missing, "HELLNET_CACHE_CONNECTION")
+			missing = append(missing, "CACHE_CONNECTION")
 		}
 	}
 	if len(missing) == 0 {
@@ -138,7 +138,7 @@ func (o Options) validate() error {
 	}
 	return fmt.Errorf("hellnet-cache: required environment variables are missing: %v\n"+
 		"set them before startup, e.g.:\n"+
-		"  export HELLNET_CACHE_CONNECTION=localhost:6379", missing)
+		"  export CACHE_CONNECTION=localhost:6379", missing)
 }
 
 // formatKey applies the external backend key prefix.
@@ -291,11 +291,11 @@ type HybridCache struct {
 var _ Cache = (*HybridCache)(nil)
 
 // New creates a cache from the environment: it loads .env and resolves
-// configuration from HELLNET_CACHE_* with HELLNET_* as fallback. inst is the
+// configuration from CACHE_*. inst is the
 // Hellnet observability contract (for example a *telemetry.Telemetry, or nil to
 // emit no telemetry; a nil pointer such as a nil *telemetry.Telemetry is treated
 // the same way). If L2 is explicitly enabled but no
-// HELLNET_CACHE_CONNECTION is present, New returns an error. Without explicit
+// CACHE_CONNECTION is present, New returns an error. Without explicit
 // enablement it falls back to memory-only. Use NewWithOptions to supply
 // explicit options, providers or a serializer.
 func New(ctx context.Context, inst instrument.Instrumentation) (*HybridCache, error) {
@@ -308,7 +308,7 @@ func New(ctx context.Context, inst instrument.Instrumentation) (*HybridCache, er
 }
 
 func optionsFromEnv() (Options, error) {
-	prefixes := []string{"HELLNET_CACHE_", "HELLNET_"}
+	prefixes := []string{"CACHE_"}
 	var readErr error
 	readDuration := func(key string, fallback time.Duration) time.Duration {
 		value, err := cacheDurationEnv(prefixes, key, fallback)
@@ -431,7 +431,7 @@ func newWithDependencies(ctx context.Context, o Options, supplied []Provider, se
 	inst = instrument.Resolve(inst)
 	if o.EnableL2 && o.Connection == "" {
 		if o.l2Explicit {
-			return nil, fmt.Errorf("cache: L2 explicitly enabled but HELLNET_CACHE_CONNECTION is not configured")
+			return nil, fmt.Errorf("cache: L2 explicitly enabled but CACHE_CONNECTION is not configured")
 		}
 		warnL2DegradedOnce(inst) //nolint:contextcheck // constructor warning has no caller context.
 		o.EnableL2 = false

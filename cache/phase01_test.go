@@ -26,9 +26,9 @@ func TestMain(m *testing.M) {
 }
 
 func TestNew_ExplicitL2WithoutConnectionReturnsError(t *testing.T) {
-	t.Setenv("HELLNET_CACHE_ENABLE_L2", "true")
-	t.Setenv("HELLNET_CACHE_CONNECTION", "")
-	t.Setenv("HELLNET_CACHE_LOAD_DOTENV", "false")
+	t.Setenv("CACHE_ENABLE_L2", "true")
+	t.Setenv("CACHE_CONNECTION", "")
+	t.Setenv("CACHE_LOAD_DOTENV", "false")
 
 	if _, err := New(context.Background(), nil); err == nil {
 		t.Fatal("New should reject explicitly enabled L2 without connection")
@@ -36,10 +36,10 @@ func TestNew_ExplicitL2WithoutConnectionReturnsError(t *testing.T) {
 }
 
 func TestNew_DurationSuffixUsesDeclaredUnit(t *testing.T) {
-	t.Setenv("HELLNET_CACHE_ENABLE_L2", "false")
-	t.Setenv("HELLNET_CACHE_RETRY_BASE_DELAY_MS", "500")
-	t.Setenv("HELLNET_CACHE_CB_DURATION_SEC", "2")
-	t.Setenv("HELLNET_CACHE_LOAD_DOTENV", "false")
+	t.Setenv("CACHE_ENABLE_L2", "false")
+	t.Setenv("CACHE_RETRY_BASE_DELAY_MS", "500")
+	t.Setenv("CACHE_CB_DURATION_SEC", "2")
+	t.Setenv("CACHE_LOAD_DOTENV", "false")
 
 	c, err := New(context.Background(), nil)
 	if err != nil {
@@ -56,9 +56,9 @@ func TestNew_DurationSuffixUsesDeclaredUnit(t *testing.T) {
 }
 
 func TestNew_InvalidDefinedDurationReturnsError(t *testing.T) {
-	t.Setenv("HELLNET_CACHE_ENABLE_L2", "false")
-	t.Setenv("HELLNET_CACHE_RETRY_BASE_DELAY_MS", "not-a-duration")
-	t.Setenv("HELLNET_CACHE_LOAD_DOTENV", "false")
+	t.Setenv("CACHE_ENABLE_L2", "false")
+	t.Setenv("CACHE_RETRY_BASE_DELAY_MS", "not-a-duration")
+	t.Setenv("CACHE_LOAD_DOTENV", "false")
 
 	if _, err := New(context.Background(), nil); err == nil {
 		t.Fatal("New should reject invalid defined duration")
@@ -115,7 +115,7 @@ func TestNewWithOptions_InjectsProviderAndSerializer(t *testing.T) {
 }
 
 func TestNewWithOptions_ExplicitOptionsIgnoreEnvironment(t *testing.T) {
-	t.Setenv("HELLNET_CACHE_RETRY_BASE_DELAY_MS", "invalid")
+	t.Setenv("CACHE_RETRY_BASE_DELAY_MS", "invalid")
 	c, err := NewWithOptions(context.Background(), WithOptions(optsL1Only()))
 	if err != nil {
 		t.Fatalf("explicit options must not read environment: %v", err)
