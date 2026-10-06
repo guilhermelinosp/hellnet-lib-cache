@@ -37,6 +37,3 @@ jobs:
 
   release:
     uses: guilhermelinosp/templates/.github/workflows/release.yml@latest
-    with:
-      app-client-id: ${{ vars.HELLNET_ACTIONS_CLIENT_ID }}
-    secrets: inherit
