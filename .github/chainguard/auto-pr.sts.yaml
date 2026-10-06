@@ -1,0 +1,7 @@
+issuer: https://token.actions.githubusercontent.com
+subject_pattern: 'repo:guilhermelinosp@121059870/hellnet-lib-cache@[0-9]+:.*'
+claim_pattern:
+  job_workflow_ref: 'guilhermelinosp/templates/\.github/workflows/auto-pr\.yml@.*'
+permissions:
+  contents: write
+  pull_requests: write
