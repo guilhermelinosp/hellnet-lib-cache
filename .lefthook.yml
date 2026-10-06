@@ -37,4 +37,4 @@ pre-push:
 commit-msg:
   commands:
     conventional:
-      run: 'grep -Eq "^(feat|fix|docs|style|refactor|perf|test|ci|chore|revert|ops)(\\(.+\\))?!?: .+" {1}'
+      run: 'grep -Eq "^(feat|fix|docs|style|refactor|perf|test|ci|chore|revert|ops|build)(\\(.+\\))?!?: .+" {1}'
