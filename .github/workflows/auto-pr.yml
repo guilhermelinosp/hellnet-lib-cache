@@ -15,6 +15,3 @@ permissions:
 jobs:
   create-pr:
     uses: guilhermelinosp/templates/.github/workflows/auto-pr.yml@latest
-    with:
-      app-client-id: ${{ vars.HELLNET_ACTIONS_CLIENT_ID }}
-    secrets: inherit
